@@ -20,6 +20,10 @@
     gcc.debug       gcc debug variant
     gcc.release     gcc release variant
 
+    mingw           All mingw-w64 variants
+    mingw.debug     mingw-w64 debug variant - currently broken, see http://stackoverflow.com/questions/16596876/object-file-has-too-many-sections
+    mingw.release   mingw-w64 release variant
+
     msvc            All msvc variants
     msvc.debug      MSVC debug variant
     msvc.release    MSVC release variant
@@ -94,6 +98,7 @@ def import_environ(env):
             env[keys] = value
     set(['GNU_CC', 'GNU_CXX', 'GNU_LINK'])
     set(['CLANG_CC', 'CLANG_CXX', 'CLANG_LINK'])
+    set(['MINGW_CC', 'MINGW_CXX', 'MINGW_LINK'])
 
 def detect_toolchains(env):
     def is_compiler(comp_from, comp_to):
@@ -163,11 +168,44 @@ def detect_toolchains(env):
         env['GNU_LINK'] = env['LINK']
         return False
 
+    def detect_mingw(env):
+        n = sum(x in env for x in ['MINGW_CC', 'MINGW_CXX', 'MINGW_LINK'])
+        if n > 0:
+            if n == 3:
+                return True
+            raise ValueError('MINGW_CC, MINGW_CXX, and MINGW_LINK must be set together')
+        cc = env.get('CC')
+        cxx = env.get('CXX')
+        link = env.subst(env.get('LINK'))
+        if (cc and cxx and link and
+            is_compiler(cc, '/usr/bin/x86_64-w64-mingw32-gcc') and
+            is_compiler(cxx, '/usr/bin/x86_64-w64-mingw32-g++') and
+            is_compiler(link, '/usr/bin/x86_64-w64-mingw32-g++')):
+            env['MINGW_CC'] = cc
+            env['MINGW_CXX'] = cxx
+            env['MINGW_LINK'] = link
+            return True
+        cc = env.WhereIs('/usr/bin/x86_64-w64-mingw32-gcc')
+        cxx = env.WhereIs('/usr/bin/x86_64-w64-mingw32-g++')
+        link = cxx
+        if (is_compiler(cc, '/usr/bin/x86_64-w64-mingw32-gcc') and
+            is_compiler(cxx, '/usr/bin/x86_64-w64-mingw32-g++') and
+            is_compiler(link, '/usr/bin/x86_64-w64-mingw32-g++')):
+           env['MINGW_CC'] = cc
+           env['MINGW_CXX'] = cxx
+           env['MINGW_LINK'] = link
+           return True
+        env['MINGW_CC'] = '/usr/bin/x86_64-w64-mingw32-gcc'
+        env['MINGW_CXX'] = '/usr/bin/x86_64-w64-mingw32-g++'
+        env['MINGW_LINK'] = env['LINK']
+        return False
     toolchains = []
     if detect_clang(env):
         toolchains.append('clang')
     if detect_gcc(env):
         toolchains.append('gcc')
+    if detect_mingw(env):
+        toolchains.append('mingw')
     if env.Detect('cl'):
         toolchains.append('msvc')
     return toolchains
@@ -197,8 +235,6 @@ def config_base(env):
             LINKCOMSTR='Linking ' + Beast.blue('$TARGET'),
             )
     check_openssl()
-
-    env.Append(CPPDEFINES=['OPENSSL_NO_SSL2'])
 
     #git = Beast.Git(env) #  TODO(TOM)
     if False: #git.exists:
@@ -242,7 +278,8 @@ def config_env(toolchain, variant, env):
     elif variant == 'release':
         env.Append(CPPDEFINES=['NDEBUG'])
 
-    if toolchain in Split('clang gcc'):
+    if toolchain in ['clang', 'gcc', 'mingw']:
+
         if Beast.system.linux:
             env.ParseConfig('pkg-config --static --cflags --libs openssl')
             env.ParseConfig('pkg-config --static --cflags --libs protobuf')
@@ -251,6 +288,7 @@ def config_env(toolchain, variant, env):
         env.Prepend(CXXFLAGS=['-Wall'])
 
         env.Append(CCFLAGS=[
+            '-Wall',
             '-Wno-sign-compare',
             '-Wno-char-subscripts',
             '-Wno-format',
@@ -322,6 +360,10 @@ def config_env(toolchain, variant, env):
             env.Append(CCFLAGS=[
                 '-g'
                 ])
+            if toolchain == 'gcc' or 'mingw':
+                env.Append(CCFLAGS=[
+                '-Og'  # introduced with gcc 4.8, see https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html
+                ])
         elif variant == 'release':
             env.Append(CCFLAGS=[
                 '-O3',
@@ -351,6 +393,12 @@ def config_env(toolchain, variant, env):
                             LINK=env['GNU_LINK'])
             # Why is this only for gcc?!
             env.Append(CCFLAGS=['-Wno-unused-local-typedefs'])
+
+        elif toolchain == 'mingw':
+            if 'MINGW_CC' in env and 'MINGW_CXX' in env and 'MINGW_LINK' in env:
+                env.Replace(CC=env['MINGW_CC'], CXX=env['MINGW_CXX'], LINK=env['MINGW_LINK'])
+            # Why is this only for gcc?!
+            #env.Append(CCFLAGS=['-Wno-unused-local-typedefs'])
 
     elif toolchain == 'msvc':
         env.Append (CPPPATH=[
@@ -466,7 +514,7 @@ base.Append(CPPPATH=[
 
 # Configure the toolchains, variants, default toolchain, and default target
 variants = ['debug', 'release']
-all_toolchains = ['clang', 'gcc', 'msvc']
+all_toolchains = ['clang', 'gcc', 'msvc', 'mingw']
 if Beast.system.osx:
     toolchains = ['clang']
     default_toolchain = 'clang'
