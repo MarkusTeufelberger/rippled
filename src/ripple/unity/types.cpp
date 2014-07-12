@@ -23,7 +23,7 @@
 #include <ripple/unity/sslutil.h>
 
 #ifdef BEAST_WIN32
-#include <Winsock2.h> // for ByteOrder.cpp
+#include <winsock2.h> // for ByteOrder.cpp
 // <Winsock2.h> defines min, max and does other stupid things
 # ifdef max
 # undef max
