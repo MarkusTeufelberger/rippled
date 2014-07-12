@@ -259,6 +259,7 @@ std::string RelativeTime::to_string () const
 	
 #if BEAST_WINDOWS
 
+#define _WIN32_WINNT 0x0600
 #include <windows.h>
 
 namespace beast {
@@ -266,6 +267,7 @@ namespace detail {
 
 static double monotonicCurrentTimeInSeconds()
 {
+    // This requires at least Vista (Winver 0x0600)
 	return GetTickCount64() / 1000.0;
 }
  
