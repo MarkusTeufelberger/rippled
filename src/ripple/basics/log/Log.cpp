@@ -61,6 +61,9 @@ bool Logs::File::open (boost::filesystem::path const& path)
     bool wasOpened = false;
 
     // VFALCO TODO Make this work with Unicode file paths
+
+    // Probably needs boost::filesystem too
+    // http://stackoverflow.com/questions/21456443/opening-a-input-filestream-with-a-unicode-name-but-ascii-data
     std::unique_ptr <std::ofstream> stream (
         new std::ofstream (path.c_str (), std::fstream::app));
 
