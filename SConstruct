@@ -396,9 +396,9 @@ def config_env(toolchain, variant, env):
 
         elif toolchain == 'mingw':
             if 'MINGW_CC' in env and 'MINGW_CXX' in env and 'MINGW_LINK' in env:
-                env.Replace(CC=env['MINGW_CC'], CXX=env['MINGW_CXX'], LINK=env['MINGW_LINK'])
-            # Why is this only for gcc?!
-            #env.Append(CCFLAGS=['-Wno-unused-local-typedefs'])
+                env.Replace(CC=env['MINGW_CC'],
+                            CXX=env['MINGW_CXX'],
+                            LINK=env['MINGW_LINK'])
 
     elif toolchain == 'msvc':
         env.Append (CPPPATH=[
