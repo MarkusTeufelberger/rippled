@@ -17,19 +17,19 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 
 #include <ripple/app/misc/AmendmentTable.h>
 #include <ripple/basics/BasicConfig.h>
 #include <ripple/basics/chrono.h>
 #include <ripple/basics/Log.h>
+#include <ripple/beast/unit_test.h>
 #include <ripple/core/ConfigSections.h>
 #include <ripple/protocol/Feature.h>
 #include <ripple/protocol/PublicKey.h>
 #include <ripple/protocol/SecretKey.h>
 #include <ripple/protocol/digest.h>
 #include <ripple/protocol/TxFlags.h>
-#include <ripple/beast/unit_test.h>
+#include <test/unit_test/SuiteJournal.h>
 
 namespace ripple
 {
@@ -90,12 +90,15 @@ private:
 
     Section const emptySection;
 
+    test::SuiteJournal journal;
+
 public:
     AmendmentTable_test ()
         : m_set1 (createSet (1, 12))
         , m_set2 (createSet (2, 12))
         , m_set3 (createSet (3, 12))
         , m_set4 (createSet (4, 12))
+        , journal ("AmendmentTable_test", *this)
     {
     }
 
@@ -112,7 +115,7 @@ public:
             supported,
             enabled,
             vetoed,
-            beast::Journal{});
+            journal);
     }
 
     std::unique_ptr<AmendmentTable>
@@ -123,7 +126,7 @@ public:
             makeSection (m_set1),
             makeSection (m_set2),
             makeSection (m_set3));
-    };
+    }
 
     void testConstruct ()
     {
@@ -331,14 +334,13 @@ public:
         BEAST_EXPECT(ret.second == post_state.end());
     }
 
-    std::vector <PublicKey> makeValidators (int num)
+    std::vector<std::pair<PublicKey,SecretKey>> makeValidators (int num)
     {
-        std::vector <PublicKey> ret;
+        std::vector <std::pair<PublicKey, SecretKey>> ret;
         ret.reserve (num);
         for (int i = 0; i < num; ++i)
         {
-            ret.push_back (
-                randomKeyPair(KeyType::secp256k1).first);
+            ret.emplace_back(randomKeyPair(KeyType::secp256k1));
         }
         return ret;
     }
@@ -352,7 +354,7 @@ public:
     void doRound(
         AmendmentTable& table,
         weeks week,
-        std::vector <PublicKey> const& validators,
+        std::vector <std::pair<PublicKey, SecretKey>> const& validators,
         std::vector <std::pair <uint256, int>> const& votes,
         std::vector <uint256>& ourVotes,
         std::set <uint256>& enabled,
@@ -378,11 +380,8 @@ public:
         int i = 0;
         for (auto const& val : validators)
         {
-            auto v = std::make_shared <STValidation> (
-                uint256(), roundTime, val, calcNodeID(val), true);
-
             ++i;
-            STVector256 field (sfAmendments);
+            std::vector<uint256> field;
 
             for (auto const& amendment : votes)
             {
@@ -392,10 +391,19 @@ public:
                     field.push_back (amendment.first);
                 }
             }
-            if (!field.empty ())
-                v->setFieldV256 (sfAmendments, field);
 
-            v->setTrusted();
+            auto v = std::make_shared<STValidation>(
+                uint256(),
+                i,
+                uint256(),
+                roundTime,
+                val.first,
+                val.second,
+                calcNodeID(val.first),
+                true,
+                STValidation::FeeSettings{},
+                field);
+
             validations.emplace_back(v);
         }
 
@@ -753,7 +761,7 @@ public:
         BEAST_EXPECT(table->hasUnsupportedEnabled());
     }
 
-    void run ()
+    void run () override
     {
         testConstruct();
         testGet ();

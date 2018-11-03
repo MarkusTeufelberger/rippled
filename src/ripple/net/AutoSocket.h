@@ -22,7 +22,7 @@
 
 #include <ripple/basics/Log.h>
 #include <ripple/beast/net/IPAddressConversion.h>
-#include <beast/core/bind_handler.hpp>
+#include <boost/beast/core/bind_handler.hpp>
 #include <boost/asio.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl.hpp>
@@ -52,6 +52,7 @@ public:
             bool plainOnly)
         : mSecure (secureOnly)
         , mBuffer ((plainOnly || secureOnly) ? 0 : 4)
+        , j_ {beast::Journal::getNullSink()}
     {
         mSocket = std::make_unique<ssl_socket> (s, c);
     }
@@ -153,16 +154,6 @@ public:
     {
         SSL_set_tlsext_host_name(mSocket->native_handle(), host.c_str());
     }
-/*
-    template <typename HandshakeHandler>
-    BOOST_ASIO_INITFN_RESULT_TYPE(HandshakeHandler,
-                                  void (boost::system::error_code))
-    async_handshake (handshake_type role,
-                     BOOST_ASIO_MOVE_ARG(HandshakeHandler) handler)
-    {
-        return async_handshake_cb (role, handler);
-    }
-*/
 
     void async_handshake (handshake_type type, callback cbFunc)
     {
@@ -177,7 +168,7 @@ public:
             // must be plain
             mSecure = false;
             mSocket->get_io_service ().post (
-                beast::bind_handler (cbFunc, error_code()));
+                boost::beast::bind_handler (cbFunc, error_code()));
         }
         else
         {
@@ -210,7 +201,7 @@ public:
                 ec = e.code();
             }
             mSocket->get_io_service ().post (
-                beast::bind_handler (handler, ec));
+                boost::beast::bind_handler (handler, ec));
         }
     }
 

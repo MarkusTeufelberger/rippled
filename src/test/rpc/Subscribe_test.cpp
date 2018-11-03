@@ -15,7 +15,7 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
+#include <ripple/app/main/LoadManager.h>
 #include <ripple/app/misc/LoadFeeTrack.h>
 #include <ripple/app/misc/NetworkOPs.h>
 #include <ripple/core/ConfigSections.h>
@@ -53,6 +53,12 @@ public:
             BEAST_EXPECT(jv[jss::status] == "success");
         }
 
+        // here we forcibly stop the load manager because it can (rarely but
+        // every-so-often) cause fees to raise or lower AFTER we've called the
+        // first findMsg but BEFORE we unsubscribe, thus causing the final
+        // findMsg check to fail since there is one unprocessed ws msg created
+        // by the loadmanager
+        env.app().getLoadManager().onStop();
         {
             // Raise fee to cause an update
             auto& feeTrack = env.app().getFeeTrack();
@@ -88,7 +94,8 @@ public:
             env.app().getOPs().reportFeeChange();
 
             // Check stream update
-            BEAST_EXPECT(! wsc->getMsg(10ms));
+            auto jvo = wsc->getMsg(10ms);
+            BEAST_EXPECTS(!jvo, "getMsg: " + to_string(jvo.get()) );
         }
     }
 
@@ -327,7 +334,7 @@ public:
             return;
 
         std::string const valPublicKey =
-            toBase58 (TokenType::TOKEN_NODE_PUBLIC,
+            toBase58 (TokenType::NodePublic,
                 derivePublicKey (KeyType::secp256k1,
                     generateSecretKey (KeyType::secp256k1, *parsedseed)));
 
@@ -353,6 +360,7 @@ public:
             env.close();
 
             // Check stream update
+            using namespace std::chrono_literals;
             BEAST_EXPECT(wsc->findMsg(5s,
                 [&](auto const& jv)
                 {

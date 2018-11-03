@@ -19,10 +19,11 @@
 
 #include <ripple/app/misc/ValidatorKeys.h>
 #include <ripple/app/misc/Manifest.h>
+#include <ripple/basics/base64.h>
 #include <ripple/beast/unit_test.h>
 #include <ripple/core/Config.h>
 #include <ripple/core/ConfigSections.h>
-#include <beast/core/detail/base64.hpp>
+#include <test/unit_test/SuiteJournal.h>
 #include <string>
 
 namespace ripple {
@@ -74,7 +75,7 @@ public:
     void
     run() override
     {
-        beast::Journal j;
+        SuiteJournal journal ("ValidatorKeys_test", *this);
 
         // Keys/ID when using [validation_seed]
         SecretKey const seedSecretKey =
@@ -83,21 +84,22 @@ public:
             derivePublicKey(KeyType::secp256k1, seedSecretKey);
         NodeID const seedNodeID = calcNodeID(seedPublicKey);
 
-        // Keys/ID when using [validation_token]
-        SecretKey const tokenSecretKey = *parseBase58<SecretKey>(
-            TokenType::TOKEN_NODE_PRIVATE, tokenSecretStr);
-        PublicKey const tokenPublicKey =
+        // Keys when using [validation_token]
+        auto const tokenSecretKey = *parseBase58<SecretKey>(
+            TokenType::NodePrivate, tokenSecretStr);
+
+        auto const tokenPublicKey =
             derivePublicKey(KeyType::secp256k1, tokenSecretKey);
 
         auto const m = Manifest::make_Manifest(
-                beast::detail::base64_decode(tokenManifest));
+            base64_decode(tokenManifest));
         BEAST_EXPECT(m);
         NodeID const tokenNodeID = calcNodeID(m->masterKey);
 
         {
             // No config -> no key but valid
             Config c;
-            ValidatorKeys k{c, j};
+            ValidatorKeys k{c, journal};
             BEAST_EXPECT(k.publicKey.size() == 0);
             BEAST_EXPECT(k.manifest.empty());
             BEAST_EXPECT(!k.configInvalid());
@@ -108,7 +110,7 @@ public:
             Config c;
             c.section(SECTION_VALIDATION_SEED).append(seed);
 
-            ValidatorKeys k{c, j};
+            ValidatorKeys k{c, journal};
             BEAST_EXPECT(k.publicKey == seedPublicKey);
             BEAST_EXPECT(k.secretKey == seedSecretKey);
             BEAST_EXPECT(k.nodeID == seedNodeID);
@@ -121,7 +123,7 @@ public:
             Config c;
             c.section(SECTION_VALIDATION_SEED).append("badseed");
 
-            ValidatorKeys k{c, j};
+            ValidatorKeys k{c, journal};
             BEAST_EXPECT(k.configInvalid());
             BEAST_EXPECT(k.publicKey.size() == 0);
             BEAST_EXPECT(k.manifest.empty());
@@ -131,7 +133,7 @@ public:
             // validator token
             Config c;
             c.section(SECTION_VALIDATOR_TOKEN).append(tokenBlob);
-            ValidatorKeys k{c, j};
+            ValidatorKeys k{c, journal};
 
             BEAST_EXPECT(k.publicKey == tokenPublicKey);
             BEAST_EXPECT(k.secretKey == tokenSecretKey);
@@ -143,7 +145,7 @@ public:
             // invalid validator token
             Config c;
             c.section(SECTION_VALIDATOR_TOKEN).append("badtoken");
-            ValidatorKeys k{c, j};
+            ValidatorKeys k{c, journal};
             BEAST_EXPECT(k.configInvalid());
             BEAST_EXPECT(k.publicKey.size() == 0);
             BEAST_EXPECT(k.manifest.empty());
@@ -154,7 +156,7 @@ public:
             Config c;
             c.section(SECTION_VALIDATION_SEED).append(seed);
             c.section(SECTION_VALIDATOR_TOKEN).append(tokenBlob);
-            ValidatorKeys k{c, j};
+            ValidatorKeys k{c, journal};
 
             BEAST_EXPECT(k.configInvalid());
             BEAST_EXPECT(k.publicKey.size() == 0);
@@ -165,7 +167,7 @@ public:
             // Token manifest and private key must match
             Config c;
             c.section(SECTION_VALIDATOR_TOKEN).append(invalidTokenBlob);
-            ValidatorKeys k{c, j};
+            ValidatorKeys k{c, journal};
 
             BEAST_EXPECT(k.configInvalid());
             BEAST_EXPECT(k.publicKey.size() == 0);

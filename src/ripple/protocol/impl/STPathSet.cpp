@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/protocol/STPathSet.h>
 #include <ripple/protocol/JsonFields.h>
 #include <ripple/basics/contract.h>
@@ -157,7 +156,7 @@ STPath::getJson (int) const
     for (auto it: mPath)
     {
         Json::Value elem (Json::objectValue);
-        int         iType   = it.getNodeType ();
+        auto const iType   = it.getNodeType ();
 
         elem[jss::type]      = iType;
         elem[jss::type_hex]  = strHex (iType);

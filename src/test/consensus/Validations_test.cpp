@@ -16,7 +16,7 @@
     OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 */
 //==============================================================================
-#include <BeastConfig.h>
+
 #include <ripple/basics/tagged_integer.h>
 #include <ripple/beast/clock/manual_clock.h>
 #include <ripple/beast/unit_test.h>
@@ -58,7 +58,9 @@ class Validations_test : public beast::unit_test::suite
         boost::optional<std::uint32_t> loadFee_;
 
     public:
-        Node(PeerID nodeID, clock_type const& c) : c_(c), nodeID_(nodeID)
+        Node(PeerID nodeID, clock_type const& c)
+            : c_(c)
+            , nodeID_(nodeID)
         {
         }
 
@@ -242,7 +244,7 @@ class Validations_test : public beast::unit_test::suite
         PeerID nextNodeId_{0};
 
     public:
-        TestHarness(LedgerOracle& o)
+        explicit TestHarness(LedgerOracle& o)
             : tv_(p_, clock_, staleData_, clock_, o)
         {
         }
@@ -683,12 +685,10 @@ class Validations_test : public beast::unit_test::suite
                     sorted(harness.vals().getTrustedForLedger(id)) ==
                     sorted(expectedValidations));
 
-                std::vector<NetClock::time_point> expectedTimes;
                 std::uint32_t baseFee = 0;
                 std::vector<uint32_t> expectedFees;
                 for (auto const& val : expectedValidations)
                 {
-                    expectedTimes.push_back(val.signTime());
                     expectedFees.push_back(val.loadFee().value_or(baseFee));
                 }
 
@@ -696,9 +696,6 @@ class Validations_test : public beast::unit_test::suite
                     sorted(harness.vals().fees(id, baseFee)) ==
                     sorted(expectedFees));
 
-                BEAST_EXPECT(
-                    sorted(harness.vals().getTrustedValidationTimes(id)) ==
-                    sorted(expectedTimes));
             }
         };
 

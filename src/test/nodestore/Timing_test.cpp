@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <test/nodestore/TestBase.h>
 #include <ripple/nodestore/DummyScheduler.h>
 #include <ripple/nodestore/Manager.h>
@@ -26,6 +25,7 @@
 #include <ripple/beast/utility/temp_dir.h>
 #include <ripple/beast/xor_shift_engine.h>
 #include <ripple/beast/unit_test.h>
+#include <test/unit_test/SuiteJournal.h>
 #include <beast/unit_test/thread.hpp>
 #include <boost/algorithm/string.hpp>
 #include <atomic>
@@ -84,14 +84,16 @@ private:
 
     beast::xor_shift_engine gen_;
     std::uint8_t prefix_;
-    std::uniform_int_distribution<std::uint32_t> d_type_;
+    std::discrete_distribution<std::uint32_t> d_type_;
     std::uniform_int_distribution<std::uint32_t> d_size_;
 
 public:
     explicit
     Sequence(std::uint8_t prefix)
         : prefix_ (prefix)
-        , d_type_ (hotLEDGER, hotTRANSACTION_NODE)
+        // uniform distribution over hotLEDGER - hotTRANSACTION_NODE
+        // but exclude  hotTRANSACTION = 2 (removed)
+        , d_type_ ({1, 1, 0, 1, 1})
         , d_size_ (minSize, maxSize)
     {
     }
@@ -270,9 +272,9 @@ public:
 
     // Insert only
     void
-    do_insert (Section const& config, Params const& params)
+    do_insert (Section const& config,
+        Params const& params, beast::Journal journal)
     {
-        beast::Journal journal;
         DummyScheduler scheduler;
         auto backend = make_Backend (config, scheduler, journal);
         BEAST_EXPECT(backend != nullptr);
@@ -325,9 +327,9 @@ public:
 
     // Fetch existing keys
     void
-    do_fetch (Section const& config, Params const& params)
+    do_fetch (Section const& config,
+        Params const& params, beast::Journal journal)
     {
-        beast::Journal journal;
         DummyScheduler scheduler;
         auto backend = make_Backend (config, scheduler, journal);
         BEAST_EXPECT(backend != nullptr);
@@ -387,9 +389,9 @@ public:
 
     // Perform lookups of non-existent keys
     void
-    do_missing (Section const& config, Params const& params)
+    do_missing (Section const& config,
+        Params const& params, beast::Journal journal)
     {
-        beast::Journal journal;
         DummyScheduler scheduler;
         auto backend = make_Backend (config, scheduler, journal);
         BEAST_EXPECT(backend != nullptr);
@@ -451,9 +453,9 @@ public:
 
     // Fetch with present and missing keys
     void
-    do_mixed (Section const& config, Params const& params)
+    do_mixed (Section const& config,
+        Params const& params, beast::Journal journal)
     {
-        beast::Journal journal;
         DummyScheduler scheduler;
         auto backend = make_Backend (config, scheduler, journal);
         BEAST_EXPECT(backend != nullptr);
@@ -534,9 +536,9 @@ public:
     //      fetches an old key
     //      fetches recent, possibly non existent data
     void
-    do_work (Section const& config, Params const& params)
+    do_work (Section const& config,
+        Params const& params, beast::Journal journal)
     {
-        beast::Journal journal;
         DummyScheduler scheduler;
         auto backend = make_Backend (config, scheduler, journal);
         BEAST_EXPECT(backend != nullptr);
@@ -641,15 +643,16 @@ public:
 
     //--------------------------------------------------------------------------
 
-    using test_func = void (Timing_test::*)(Section const&, Params const&);
+    using test_func = void (Timing_test::*)(
+        Section const&, Params const&, beast::Journal);
     using test_list = std::vector <std::pair<std::string, test_func>>;
 
     duration_type
     do_test (test_func f,
-        Section const& config, Params const& params)
+        Section const& config, Params const& params, beast::Journal journal)
     {
         auto const start = clock_type::now();
-        (this->*f)(config, params);
+        (this->*f)(config, params, journal);
         return std::chrono::duration_cast<duration_type> (
             clock_type::now() - start);
     }
@@ -674,6 +677,9 @@ public:
             log << ss.str() << std::endl;
         }
 
+        using namespace beast::severities;
+        test::SuiteJournal journal ("Timing_test", *this);
+
         for (auto const& config_string : config_strings)
         {
             Params params;
@@ -689,7 +695,7 @@ public:
                     get(config, "type", std::string()) << std::right;
                 for (auto const& test : tests)
                     ss << " " << setw(w) << to_string(
-                        do_test (test.second, config, params));
+                        do_test (test.second, config, params, journal));
                 ss << "   " << to_string(config);
                 log << ss.str() << std::endl;
             }
@@ -745,7 +751,7 @@ public:
     }
 };
 
-BEAST_DEFINE_TESTSUITE_MANUAL(Timing,NodeStore,ripple);
+BEAST_DEFINE_TESTSUITE_MANUAL_PRIO(Timing,NodeStore,ripple,1);
 
 }
 }

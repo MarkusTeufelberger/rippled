@@ -40,6 +40,7 @@ public:
     SecretKey secretKey;
     NodeID nodeID;
     std::string manifest;
+
     ValidatorKeys(Config const& config, beast::Journal j);
 
     bool configInvalid() const

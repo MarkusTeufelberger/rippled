@@ -28,13 +28,13 @@ class CancelCheck
     : public Transactor
 {
 public:
-    CancelCheck (ApplyContext& ctx)
+    explicit CancelCheck (ApplyContext& ctx)
         : Transactor (ctx)
     {
     }
 
     static
-    TER
+    NotTEC
     preflight (PreflightContext const& ctx);
 
     static

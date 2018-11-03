@@ -17,11 +17,11 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/basics/contract.h>
 #include <ripple/nodestore/Factory.h>
 #include <ripple/nodestore/Manager.h>
-#include <beast/core/string.hpp>
+#include <boost/beast/core/string.hpp>
+#include <boost/core/ignore_unused.hpp>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -31,6 +31,8 @@ namespace NodeStore {
 
 struct MemoryDB
 {
+    explicit MemoryDB() = default;
+
     std::mutex mutex;
     bool open = false;
     std::map <uint256 const, std::shared_ptr<NodeObject>> table;
@@ -40,21 +42,21 @@ class MemoryFactory : public Factory
 {
 private:
     std::mutex mutex_;
-    std::map <std::string, MemoryDB, beast::iless> map_;
+    std::map <std::string, MemoryDB, boost::beast::iless> map_;
 
 public:
     MemoryFactory();
-    ~MemoryFactory();
+    ~MemoryFactory() override;
 
     std::string
-    getName() const;
+    getName() const override;
 
     std::unique_ptr <Backend>
     createInstance (
         size_t keyBytes,
         Section const& keyValues,
         Scheduler& scheduler,
-        beast::Journal journal);
+        beast::Journal journal) override;
 
     MemoryDB&
     open (std::string const& path)
@@ -88,11 +90,12 @@ public:
         : name_ (get<std::string>(keyValues, "path"))
         , journal_ (journal)
     {
+        boost::ignore_unused (journal_); // Keep unused journal_ just in case.
         if (name_.empty())
             Throw<std::runtime_error> ("Missing path in Memory backend");
     }
 
-    ~MemoryBackend ()
+    ~MemoryBackend () override
     {
         close();
     }
@@ -104,7 +107,7 @@ public:
     }
 
     void
-    open() override
+    open(bool createIfMissing) override
     {
         db_ = &memoryFactory.open(name_);
     }

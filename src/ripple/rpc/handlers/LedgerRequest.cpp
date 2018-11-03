@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/app/ledger/InboundLedgers.h>
 #include <ripple/app/ledger/LedgerToJson.h>
 #include <ripple/app/ledger/LedgerMaster.h>
@@ -119,7 +118,7 @@ Json::Value doLedgerRequest (RPC::Context& context)
             neededHash = hashOfSeq(*ledger, ledgerIndex, j);
         }
         assert (neededHash);
-        ledgerHash = neededHash ? *neededHash : zero; // kludge
+        ledgerHash = neededHash ? *neededHash : beast::zero; // kludge
     }
 
     // Try to get the desired ledger

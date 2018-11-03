@@ -17,11 +17,12 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/app/main/Application.h>
 #include <ripple/basics/StringUtilities.h>
+#include <ripple/basics/ByteUtilities.h>
 #include <ripple/net/RPCCall.h>
 #include <ripple/net/RPCErr.h>
+#include <ripple/basics/base64.h>
 #include <ripple/basics/contract.h>
 #include <ripple/basics/Log.h>
 #include <ripple/core/Config.h>
@@ -33,10 +34,10 @@
 #include <ripple/protocol/ErrorCodes.h>
 #include <ripple/protocol/Feature.h>
 #include <ripple/protocol/SystemParameters.h>
-#include <ripple/protocol/types.h>
+#include <ripple/protocol/UintTypes.h>
 #include <ripple/rpc/ServerHandler.h>
 #include <ripple/beast/core/LexicalCast.h>
-#include <beast/core/string.hpp>
+#include <boost/beast/core/string.hpp>
 #include <boost/asio/streambuf.hpp>
 #include <boost/optional.hpp>
 #include <boost/regex.hpp>
@@ -82,33 +83,6 @@ std::string createHTTPPost (
     s << "\r\n" << strMsg;
 
     return s.str ();
-}
-
-static
-boost::optional<std::uint64_t>
-to_uint64(std::string const& s)
-{
-    if (s.empty())
-        return boost::none;
-
-    for (auto c : s)
-    {
-        if (!isdigit(c))
-            return boost::none;
-    }
-
-    try
-    {
-        std::size_t pos{};
-        auto const drops = std::stoul(s, &pos);
-        if (s.size() != pos)
-            return boost::none;
-        return drops;
-    }
-    catch (std::exception const&)
-    {
-        return boost::none;
-    }
 }
 
 class RPCParser
@@ -177,6 +151,37 @@ private:
             v[jss::params] = jvParams;
 
         return v;
+    }
+
+    Json::Value parseDownloadShard(Json::Value const& jvParams)
+    {
+        Json::Value jvResult(Json::objectValue);
+        unsigned int sz {jvParams.size()};
+        unsigned int i {0};
+
+        // If odd number of params then 'novalidate' may have been specified
+        if (sz & 1)
+        {
+            using namespace boost::beast::detail;
+            if (iequals(jvParams[0u].asString(), "novalidate"))
+                ++i;
+            else if (!iequals(jvParams[--sz].asString(), "novalidate"))
+                return rpcError(rpcINVALID_PARAMS);
+            jvResult[jss::validate] = false;
+        }
+
+        // Create the 'shards' array
+        Json::Value shards(Json::arrayValue);
+        for (; i < sz; i += 2)
+        {
+            Json::Value shard(Json::objectValue);
+            shard[jss::index] = jvParams[i].asUInt();
+            shard[jss::url] = jvParams[i + 1].asString();
+            shards.append(std::move(shard));
+        }
+        jvResult[jss::shards] = std::move(shards);
+
+        return jvResult;
     }
 
     Json::Value parseInternal (Json::Value const& jvParams)
@@ -431,6 +436,19 @@ private:
         return jvRequest;
     }
 
+    // deposit_authorized <source_account> <destination_account> [<ledger>]
+    Json::Value parseDepositAuthorized (Json::Value const& jvParams)
+    {
+        Json::Value jvRequest (Json::objectValue);
+        jvRequest[jss::source_account] = jvParams[0u].asString ();
+        jvRequest[jss::destination_account] = jvParams[1u].asString ();
+
+        if (jvParams.size () == 3)
+            jvParseLedger (jvRequest, jvParams[2u].asString ());
+
+        return jvRequest;
+    }
+
     // Return an error for attemping to subscribe/unsubscribe via RPC.
     Json::Value parseEvented (Json::Value const& jvParams)
     {
@@ -452,9 +470,9 @@ private:
             // This may look reversed, but it's intentional: jss::vetoed
             // determines whether an amendment is vetoed - so "reject" means
             // that jss::vetoed is true.
-            if (beast::detail::iequals(action, "reject"))
+            if (boost::beast::detail::iequals(action, "reject"))
                 jvRequest[jss::vetoed] = Json::Value (true);
-            else if (beast::detail::iequals(action, "accept"))
+            else if (boost::beast::detail::iequals(action, "accept"))
                 jvRequest[jss::vetoed] = Json::Value (false);
             else
                 return rpcError (rpcINVALID_PARAMS);
@@ -723,7 +741,7 @@ private:
         std::string const strPk = jvParams[0u].asString ();
 
         bool const validPublicKey = [&strPk]{
-            if (parseBase58<PublicKey> (TokenType::TOKEN_ACCOUNT_PUBLIC, strPk))
+            if (parseBase58<PublicKey> (TokenType::AccountPublic, strPk))
                 return true;
 
             std::pair<Blob, bool> pkHex(strUnHex (strPk));
@@ -776,7 +794,7 @@ private:
             if (i < 2)
             {
                 if (parseBase58<PublicKey> (
-                        TokenType::TOKEN_ACCOUNT_PUBLIC, strParam) ||
+                        TokenType::AccountPublic, strParam) ||
                     parseBase58<AccountID> (strParam) ||
                     parseGenericSeed (strParam))
                 {
@@ -811,7 +829,7 @@ private:
             --iCursor;
         }
 
-        if (! parseBase58<PublicKey>(TokenType::TOKEN_ACCOUNT_PUBLIC, strIdent) &&
+        if (! parseBase58<PublicKey>(TokenType::AccountPublic, strIdent) &&
             ! parseBase58<AccountID>(strIdent) &&
             ! parseGenericSeed(strIdent))
             return rpcError (rpcACT_MALFORMED);
@@ -1041,6 +1059,15 @@ private:
         return jvRequest;
     }
 
+    // server_info [counters]
+    Json::Value parseServerInfo (Json::Value const& jvParams)
+    {
+        Json::Value     jvRequest (Json::objectValue);
+        if (jvParams.size() == 1 && jvParams[0u].asString() == "counters")
+            jvRequest[jss::counters] = true;
+        return jvRequest;
+    }
+
 public:
     //--------------------------------------------------------------------------
 
@@ -1090,9 +1117,11 @@ public:
             {   "channel_verify",       &RPCParser::parseChannelVerify,         4,  4   },
             {   "connect",              &RPCParser::parseConnect,               1,  2   },
             {   "consensus_info",       &RPCParser::parseAsIs,                  0,  0   },
+            {   "deposit_authorized",   &RPCParser::parseDepositAuthorized,     2,  3   },
+            {   "download_shard",       &RPCParser::parseDownloadShard,         2,  -1  },
             {   "feature",              &RPCParser::parseFeature,               0,  2   },
             {   "fetch_info",           &RPCParser::parseFetchInfo,             0,  1   },
-            {   "gateway_balances",     &RPCParser::parseGatewayBalances  ,     1,  -1  },
+            {   "gateway_balances",     &RPCParser::parseGatewayBalances,       1, -1   },
             {   "get_counts",           &RPCParser::parseGetCounts,             0,  1   },
             {   "json",                 &RPCParser::parseJson,                  2,  2   },
             {   "json2",                &RPCParser::parseJson2,                 1,  1   },
@@ -1116,8 +1145,9 @@ public:
             {   "sign_for",             &RPCParser::parseSignFor,               3,  4   },
             {   "submit",               &RPCParser::parseSignSubmit,            1,  3   },
             {   "submit_multisigned",   &RPCParser::parseSubmitMultiSigned,     1,  1   },
-            {   "server_info",          &RPCParser::parseAsIs,                  0,  0   },
-            {   "server_state",         &RPCParser::parseAsIs,                  0,  0   },
+            {   "server_info",          &RPCParser::parseServerInfo,            0,  1   },
+            {   "server_state",         &RPCParser::parseServerInfo,            0,  1   },
+            {   "crawl_shards",         &RPCParser::parseAsIs,                  0,  2   },
             {   "stop",                 &RPCParser::parseAsIs,                  0,  0   },
             {   "transaction_entry",    &RPCParser::parseTransactionEntry,      2,  2   },
             {   "tx",                   &RPCParser::parseTx,                    1,  2   },
@@ -1128,12 +1158,12 @@ public:
             {   "validation_seed",      &RPCParser::parseValidationSeed,        0,  1   },
             {   "version",              &RPCParser::parseAsIs,                  0,  0   },
             {   "wallet_propose",       &RPCParser::parseWalletPropose,         0,  1   },
-            {   "internal",             &RPCParser::parseInternal,              1,  -1  },
+            {   "internal",             &RPCParser::parseInternal,              1, -1   },
 
             // Evented methods
-            {   "path_find",            &RPCParser::parseEvented,               -1, -1  },
-            {   "subscribe",            &RPCParser::parseEvented,               -1, -1  },
-            {   "unsubscribe",          &RPCParser::parseEvented,               -1, -1  },
+            {   "path_find",            &RPCParser::parseEvented,              -1, -1   },
+            {   "subscribe",            &RPCParser::parseEvented,              -1, -1   },
+            {   "unsubscribe",          &RPCParser::parseEvented,              -1, -1   },
         };
 
         auto const count = jvParams.size ();
@@ -1197,6 +1227,8 @@ namespace
 
 struct RPCCallImp
 {
+    explicit RPCCallImp() = default;
+
     // VFALCO NOTE Is this a to-do comment or a doc comment?
     // Place the async result somewhere useful.
     static void callRPCHandler (Json::Value* jvOutput, Json::Value const& jvInput)
@@ -1358,9 +1390,10 @@ rpcClient(std::vector<std::string> const& args,
             }
 
             if (config.rpc_ip)
-                setup.client.ip = config.rpc_ip->to_string();
-            if (config.rpc_port)
-                setup.client.port = *config.rpc_port;
+            {
+                setup.client.ip = config.rpc_ip->address().to_string();
+                setup.client.port = config.rpc_ip->port();
+            }
 
             Json::Value jvParams (Json::arrayValue);
 
@@ -1493,7 +1526,7 @@ void fromNetwork (
     }
 
     // HTTP basic authentication
-    auto const auth = beast::detail::base64_encode(strUsername + ":" + strPassword);
+    auto const auth = base64_encode(strUsername + ":" + strPassword);
 
     std::map<std::string, std::string> mapRequestHeaders;
 
@@ -1503,7 +1536,7 @@ void fromNetwork (
 
     // Number of bytes to try to receive if no
     // Content-Length header received
-    const int RPC_REPLY_MAX_BYTES (256*1024*1024);
+    constexpr auto RPC_REPLY_MAX_BYTES = megabytes(256);
 
     using namespace std::chrono_literals;
     auto constexpr RPC_NOTIFY = 10min;

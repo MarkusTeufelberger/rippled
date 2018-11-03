@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 
 // This has to be included early to prevent an obscure MSVC compile error
 #include <boost/asio/deadline_timer.hpp>
@@ -58,6 +57,7 @@
 #include <ripple/rpc/impl/RPCHandler.cpp>
 #include <ripple/rpc/impl/RPCHelpers.cpp>
 #include <ripple/rpc/impl/ServerHandlerImp.cpp>
+#include <ripple/rpc/impl/ShardArchiveHandler.cpp>
 #include <ripple/rpc/impl/Status.cpp>
 #include <ripple/rpc/impl/TransactionSign.cpp>
 

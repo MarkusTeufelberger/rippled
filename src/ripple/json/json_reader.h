@@ -42,7 +42,7 @@ public:
     /** \brief Constructs a Reader allowing all features
      * for parsing.
      */
-    Reader ();
+    Reader () = default;
 
     /** \brief Read a Value from a <a HREF="http://www.json.org">JSON</a> document.
      * \param document UTF-8 encoded string containing the document to read.
@@ -106,6 +106,8 @@ private:
     class Token
     {
     public:
+        explicit Token() = default;
+
         TokenType type_;
         Location start_;
         Location end_;
@@ -114,6 +116,8 @@ private:
     class ErrorInfo
     {
     public:
+        explicit ErrorInfo() = default;
+
         Token token_;
         std::string message_;
         Location extra_;

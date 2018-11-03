@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 
 #include <ripple/app/tx/impl/apply.cpp>
 #include <ripple/app/tx/impl/applySteps.cpp>
@@ -30,6 +29,7 @@
 #include <ripple/app/tx/impl/CreateCheck.cpp>
 #include <ripple/app/tx/impl/CreateOffer.cpp>
 #include <ripple/app/tx/impl/CreateTicket.cpp>
+#include <ripple/app/tx/impl/DepositPreauth.cpp>
 #include <ripple/app/tx/impl/Escrow.cpp>
 #include <ripple/app/tx/impl/InvariantCheck.cpp>
 #include <ripple/app/tx/impl/OfferStream.cpp>

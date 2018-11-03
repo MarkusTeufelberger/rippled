@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/app/ledger/LedgerCleaner.h>
 #include <ripple/app/ledger/InboundLedgers.h>
 #include <ripple/app/ledger/LedgerMaster.h>
@@ -286,7 +285,7 @@ private:
                 ledger->info().hash, ledger->info().seq,
                 InboundLedger::Reason::GENERIC);
         }
-        return hash ? *hash : zero; // kludge
+        return hash ? *hash : beast::zero; // kludge
     }
 
     /** Process a single ledger
@@ -493,9 +492,7 @@ LedgerCleaner::LedgerCleaner (Stoppable& parent)
 {
 }
 
-LedgerCleaner::~LedgerCleaner ()
-{
-}
+LedgerCleaner::~LedgerCleaner() = default;
 
 std::unique_ptr<LedgerCleaner>
 make_LedgerCleaner (Application& app,

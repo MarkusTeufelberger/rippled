@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/basics/Log.h>
 #include <ripple/protocol/JsonFields.h>
 #include <ripple/protocol/SecretKey.h>
@@ -633,7 +632,7 @@ public:
     }
 
     void
-    run()
+    run() override
     {
         // Instantiate a jtx::Env so debugLog writes are exercised.
         test::jtx::Env env (*this);

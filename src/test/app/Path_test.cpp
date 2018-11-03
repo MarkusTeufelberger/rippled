@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/app/paths/AccountCurrencies.h>
 #include <ripple/basics/contract.h>
 #include <ripple/core/JobQueue.h>
@@ -231,7 +230,7 @@ public:
         auto& app = env.app();
         Resource::Charge loadType = Resource::feeReferenceRPC;
         Resource::Consumer c;
-        RPC::Context context {beast::Journal(), {}, app, loadType,
+        RPC::Context context {env.journal, {}, app, loadType,
             app.getOPs(), app.getLedgerMaster(), c, Role::USER, {}};
 
         Json::Value params = Json::objectValue;
@@ -260,6 +259,7 @@ public:
                 g.signal();
             });
 
+        using namespace std::chrono_literals;
         BEAST_EXPECT(g.wait_for(5s));
         BEAST_EXPECT(! result.isMember(jss::error));
         return result;
@@ -328,7 +328,7 @@ public:
         auto& app = env.app();
         Resource::Charge loadType = Resource::feeReferenceRPC;
         Resource::Consumer c;
-        RPC::Context context {beast::Journal(), {}, app, loadType,
+        RPC::Context context {env.journal, {}, app, loadType,
             app.getOPs(), app.getLedgerMaster(), c, Role::USER, {}};
         Json::Value result;
         gate g;
@@ -1353,7 +1353,7 @@ public:
     }
 
     void
-    run()
+    run() override
     {
         source_currencies_limit();
         no_direct_path_no_intermediary_no_alternatives();

@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/app/ledger/OpenLedger.h>
 #include <ripple/app/main/Application.h>
 #include <ripple/app/misc/TxQ.h>
@@ -31,6 +30,7 @@ namespace ripple
     {
         // Bail if fee escalation is not enabled.
         auto const view = context.app.openLedger().current();
+        BOOST_ASSERT(view);
         if (!view || !view->rules().enabled(featureFeeEscalation))
         {
             RPC::inject_error(rpcNOT_ENABLED, context.params);

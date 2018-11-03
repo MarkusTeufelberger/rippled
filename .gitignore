@@ -22,6 +22,7 @@ bin/project-cache.jam
 # Ignore object files.
 *.o
 build
+.nih_c
 tags
 TAGS
 bin/rippled
@@ -91,3 +92,4 @@ Builds/VisualStudio2015/*.sdf
 # MSVC
 *.pdb
 .vs/
+CMakeSettings.json

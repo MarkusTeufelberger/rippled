@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/protocol/LedgerFormats.h>
 #include <ripple/protocol/ErrorCodes.h>
 #include <ripple/protocol/JsonFields.h>
@@ -166,6 +165,14 @@ LedgerFormats::LedgerFormats ()
             << SOElement (sfInvoiceID,           SOE_OPTIONAL)
             << SOElement (sfSourceTag,           SOE_OPTIONAL)
             << SOElement (sfDestinationTag,      SOE_OPTIONAL)
+            << SOElement (sfPreviousTxnID,       SOE_REQUIRED)
+            << SOElement (sfPreviousTxnLgrSeq,   SOE_REQUIRED)
+            ;
+
+    add ("DepositPreauth", ltDEPOSIT_PREAUTH)
+            << SOElement (sfAccount,             SOE_REQUIRED)
+            << SOElement (sfAuthorize,           SOE_REQUIRED)
+            << SOElement (sfOwnerNode,           SOE_REQUIRED)
             << SOElement (sfPreviousTxnID,       SOE_REQUIRED)
             << SOElement (sfPreviousTxnLgrSeq,   SOE_REQUIRED)
             ;

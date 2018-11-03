@@ -20,6 +20,7 @@
 #include <ripple/app/ledger/LedgerToJson.h>
 #include <ripple/app/misc/TxQ.h>
 #include <ripple/basics/base_uint.h>
+#include <ripple/basics/date.h>
 
 namespace ripple {
 
@@ -132,7 +133,8 @@ Json::Value fillJsonTx (LedgerFill const& fill,
             if (account != amount.getIssuer())
             {
                 auto const ownerFunds = accountFunds(fill.ledger,
-                    account, amount, fhIGNORE_FREEZE, beast::Journal());
+                    account, amount, fhIGNORE_FREEZE,
+                    beast::Journal {beast::Journal::getNullSink()});
                 txJson[jss::owner_funds] = ownerFunds.getText ();
             }
         }

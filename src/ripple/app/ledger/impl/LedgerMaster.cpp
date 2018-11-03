@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/app/ledger/LedgerMaster.h>
 #include <ripple/app/ledger/OpenLedger.h>
 #include <ripple/app/ledger/OrderBookDB.h>
@@ -37,7 +36,7 @@
 #include <ripple/basics/contract.h>
 #include <ripple/basics/Log.h>
 #include <ripple/basics/TaggedCache.h>
-#include <ripple/basics/UptimeTimer.h>
+#include <ripple/basics/UptimeClock.h>
 #include <ripple/core/TimeKeeper.h>
 #include <ripple/nodestore/DatabaseShard.h>
 #include <ripple/overlay/Overlay.h>
@@ -74,7 +73,7 @@ LedgerMaster::LedgerMaster (Application& app, Stopwatch& stopwatch,
         app_.config().FETCH_DEPTH))
     , ledger_history_ (app_.config().LEDGER_HISTORY)
     , ledger_fetch_size_ (app_.config().getSize (siLedgerFetch))
-    , fetch_packs_ ("FetchPack", 65536, 45, stopwatch,
+    , fetch_packs_ ("FetchPack", 65536, 45s, stopwatch,
         app_.journal("TaggedCache"))
 {
 }
@@ -182,12 +181,19 @@ void
 LedgerMaster::setValidLedger(
     std::shared_ptr<Ledger const> const& l)
 {
+
     std::vector <NetClock::time_point> times;
+    boost::optional<uint256> consensusHash;
 
     if (! standalone_)
     {
-        times = app_.getValidations().getTrustedValidationTimes(
-            l->info().hash);
+        auto const vals = app_.getValidations().getTrustedForLedger(l->info().hash);
+        times.reserve(vals.size());
+        for(auto const& val: vals)
+            times.push_back(val->getSignTime());
+
+        if(!vals.empty())
+            consensusHash = vals.front()->getConsensusHash();
     }
 
     NetClock::time_point signTime;
@@ -216,7 +222,7 @@ LedgerMaster::setValidLedger(
 
     app_.getOPs().updateLocalTx (*l);
     app_.getSHAMapStore().onLedgerClosed (getValidatedLedger());
-    mLedgerHistory.validatedLedger (l);
+    mLedgerHistory.validatedLedger (l, consensusHash);
     app_.getAmendmentTable().doValidatedLedger (l);
     if (!app_.getOPs().isAmendmentBlocked() &&
         app_.getAmendmentTable().hasUnsupportedEnabled ())
@@ -444,9 +450,10 @@ LedgerMaster::tryFill (
 
     std::map< std::uint32_t, std::pair<uint256, uint256> > ledgerHashes;
 
-    std::uint32_t minHas = ledger->info().seq;
-    std::uint32_t maxHas = ledger->info().seq;
+    std::uint32_t minHas = seq;
+    std::uint32_t maxHas = seq;
 
+    NodeStore::Database& nodeStore {app_.getNodeStore()};
     while (! job.shouldCancel() && seq > 0)
     {
         {
@@ -477,6 +484,16 @@ LedgerMaster::tryFill (
 
             if (it == ledgerHashes.end ())
                 break;
+
+            if (!nodeStore.fetch(ledgerHashes.begin()->second.first,
+                ledgerHashes.begin()->first))
+            {
+                // The ledger is not backed by the node store
+                JLOG(m_journal.warn()) <<
+                    "SQL DB ledger sequence " << seq <<
+                    " mismatches node store";
+                break;
+            }
         }
 
         if (it->second.first != prevHash)
@@ -499,16 +516,29 @@ LedgerMaster::tryFill (
 /** Request a fetch pack to get to the specified ledger
 */
 void
-LedgerMaster::getFetchPack (LedgerIndex missingIndex,
+LedgerMaster::getFetchPack (LedgerIndex missing,
     InboundLedger::Reason reason)
 {
-    auto haveHash = getLedgerHashForHistory(
-        missingIndex + 1, reason);
+    auto haveHash {getLedgerHashForHistory(missing + 1, reason)};
     if (!haveHash || haveHash->isZero())
     {
-        JLOG (m_journal.error()) <<
-            "No hash for fetch pack. Missing Index " <<
-            std::to_string(missingIndex);
+        if (reason == InboundLedger::Reason::SHARD)
+        {
+            auto const shardStore {app_.getShardStore()};
+            auto const shardIndex {shardStore->seqToShardIndex(missing)};
+            if (missing < shardStore->lastLedgerSeq(shardIndex))
+            {
+                 JLOG(m_journal.error())
+                    << "No hash for fetch pack. "
+                    << "Missing ledger sequence " << missing
+                    << " while acquiring shard " << shardIndex;
+            }
+        }
+        else
+        {
+            JLOG(m_journal.error()) <<
+                "No hash for fetch pack. Missing Index " << missing;
+        }
         return;
     }
 
@@ -520,7 +550,7 @@ LedgerMaster::getFetchPack (LedgerIndex missingIndex,
         auto peerList = app_.overlay ().getActivePeers();
         for (auto const& peer : peerList)
         {
-            if (peer->hasRange (missingIndex, missingIndex + 1))
+            if (peer->hasRange (missing, missing + 1))
             {
                 int score = peer->getScore (true);
                 if (! target || (score > maxScore))
@@ -542,8 +572,7 @@ LedgerMaster::getFetchPack (LedgerIndex missingIndex,
             tmBH, protocol::mtGET_OBJECTS);
 
         target->send (packet);
-        JLOG (m_journal.trace()) << "Requested fetch pack for "
-                                            << missingIndex;
+        JLOG(m_journal.trace()) << "Requested fetch pack for " << missing;
     }
     else
         JLOG (m_journal.debug()) << "No peer for fetch pack";
@@ -804,7 +833,9 @@ LedgerMaster::checkAccept (
 /** Report that the consensus process built a particular ledger */
 void
 LedgerMaster::consensusBuilt(
-    std::shared_ptr<Ledger const> const& ledger, Json::Value consensus)
+    std::shared_ptr<Ledger const> const& ledger,
+    uint256 const& consensusHash,
+    Json::Value consensus)
 {
 
     // Because we just built a ledger, we are no longer building one
@@ -814,7 +845,7 @@ LedgerMaster::consensusBuilt(
     if (standalone_)
         return;
 
-    mLedgerHistory.builtLedger (ledger, std::move (consensus));
+    mLedgerHistory.builtLedger (ledger, consensusHash, std::move (consensus));
 
     if (ledger->info().seq <= mValidLedgerSeq)
     {
@@ -1008,7 +1039,7 @@ LedgerMaster::findNewLedgersToPublish ()
             // VFALCO TODO Restructure this code so that zero is not
             // used.
             if (! hash)
-                hash = zero; // kludge
+                hash = beast::zero; // kludge
             if (seq == valSeq)
             {
                 // We need to publish the ledger we just fully validated
@@ -1440,7 +1471,7 @@ LedgerMaster::setLedgerRangePresent (std::uint32_t minV, std::uint32_t maxV)
 }
 
 void
-LedgerMaster::tune (int size, int age)
+LedgerMaster::tune (int size, std::chrono::seconds age)
 {
     mLedgerHistory.tune (size, age);
 }
@@ -1533,8 +1564,8 @@ LedgerMaster::fetchForHistory(
                 ledger = app_.getInboundLedgers().acquire(
                     *hash, missing, reason);
                 if (!ledger &&
-                    missing > NodeStore::genesisSeq &&
-                    missing != fetch_seq_)
+                    missing != fetch_seq_ &&
+                    missing > app_.getNodeStore().earliestSeq())
                 {
                     JLOG(m_journal.trace())
                         << "fetchForHistory want fetch pack " << missing;
@@ -1594,12 +1625,12 @@ LedgerMaster::fetchForHistory(
             if (reason == InboundLedger::Reason::SHARD)
                 // Do not fetch ledger sequences lower
                 // than the shard's first ledger sequence
-                fetchSz = NodeStore::DatabaseShard::firstSeq(
-                    NodeStore::DatabaseShard::seqToShardIndex(missing));
+                fetchSz = app_.getShardStore()->firstLedgerSeq(
+                    app_.getShardStore()->seqToShardIndex(missing));
             else
                 // Do not fetch ledger sequences lower
-                // than the genesis ledger sequence
-                fetchSz = NodeStore::genesisSeq;
+                // than the earliest ledger sequence
+                fetchSz = app_.getNodeStore().earliestSeq();
             fetchSz = missing >= fetchSz ?
                 std::min(ledger_fetch_size_, (missing - fetchSz) + 1) : 0;
             try
@@ -1657,7 +1688,8 @@ void LedgerMaster::doAdvance (ScopedLockType& sl)
                 {
                     ScopedLockType sl(mCompleteLock);
                     missing = prevMissing(mCompleteLedgers,
-                        mPubLedger->info().seq, NodeStore::genesisSeq);
+                        mPubLedger->info().seq,
+                        app_.getNodeStore().earliestSeq());
                 }
                 if (missing)
                 {
@@ -1677,7 +1709,7 @@ void LedgerMaster::doAdvance (ScopedLockType& sl)
                 {
                     if (auto shardStore = app_.getShardStore())
                     {
-                        missing = shardStore->prepare(mValidLedgerSeq);
+                        missing = shardStore->prepareLedger(mValidLedgerSeq);
                         if (missing)
                             reason = InboundLedger::Reason::SHARD;
                     }
@@ -1758,13 +1790,16 @@ LedgerMaster::gotFetchPack (
     bool progress,
     std::uint32_t seq)
 {
-    // FIXME: Calling this function more than once will result in
-    // InboundLedgers::gotFetchPack being called more than once
-    // which is expensive. A flag should track whether we've already dispatched
-
-    app_.getJobQueue().addJob (
-        jtLEDGER_DATA, "gotFetchPack",
-        [&] (Job&) { app_.getInboundLedgers().gotFetchPack(); });
+    if (!mGotFetchPackThread.test_and_set(std::memory_order_acquire))
+    {
+        app_.getJobQueue().addJob (
+            jtLEDGER_DATA, "gotFetchPack",
+            [&] (Job&)
+            {
+                app_.getInboundLedgers().gotFetchPack();
+                mGotFetchPackThread.clear(std::memory_order_release);
+            });
+    }
 }
 
 void
@@ -1772,9 +1807,9 @@ LedgerMaster::makeFetchPack (
     std::weak_ptr<Peer> const& wPeer,
     std::shared_ptr<protocol::TMGetObjectByHash> const& request,
     uint256 haveLedgerHash,
-    std::uint32_t uUptime)
+     UptimeClock::time_point uptime)
 {
-    if (UptimeTimer::getInstance ().getElapsedSeconds () > (uUptime + 1))
+    if (UptimeClock::now() > uptime + 1s)
     {
         JLOG(m_journal.info()) << "Fetch pack request got stale";
         return;
@@ -1896,7 +1931,7 @@ LedgerMaster::makeFetchPack (
             wantLedger = getLedgerByHash (haveLedger->info().parentHash);
         }
         while (wantLedger &&
-               UptimeTimer::getInstance ().getElapsedSeconds () <= uUptime + 1);
+               UptimeClock::now() <= uptime + 1s);
 
         JLOG(m_journal.info())
             << "Built fetch pack with " << reply.objects ().size () << " nodes";

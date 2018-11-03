@@ -120,7 +120,7 @@ public:
     STPathElement(STPathElement const&) = default;
     STPathElement& operator=(STPathElement const&) = default;
 
-    int
+    auto
     getNodeType () const
     {
         return mType;
@@ -142,18 +142,19 @@ public:
     hasIssuer () const
     {
         return getNodeType () & STPathElement::typeIssuer;
-    };
+    }
+
     bool
     hasCurrency () const
     {
         return getNodeType () & STPathElement::typeCurrency;
-    };
+    }
 
     bool
     isNone () const
     {
         return getNodeType () == STPathElement::typeNone;
-    };
+    }
 
     // Nodes are either an account ID or a offer prefix. Offer prefixs denote a
     // class of offers.

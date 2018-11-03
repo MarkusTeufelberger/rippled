@@ -274,8 +274,8 @@ struct Peer
         Scheduler& s,
         LedgerOracle& o,
         BasicNetwork<Peer*>& n,
-        TrustGraph<Peer*> & tg,
-        CollectorRefs & c,
+        TrustGraph<Peer*>& tg,
+        CollectorRefs& c,
         beast::Journal jIn)
         : sink(jIn, "Peer " + to_string(i) + ": ")
         , j(sink)
@@ -393,8 +393,6 @@ struct Peer
     Ledger const*
     acquireLedger(Ledger::ID const& ledgerID)
     {
-        using namespace std::chrono;
-
         auto it = ledgers.find(ledgerID);
         if (it != ledgers.end())
             return &(it->second);
@@ -411,7 +409,7 @@ struct Peer
                 return nullptr;
         }
 
-
+        using namespace std::chrono_literals;
         SimDuration minDuration{10s};
         for (auto const& link : net.links(this))
         {
@@ -457,6 +455,7 @@ struct Peer
                 return nullptr;
         }
 
+        using namespace std::chrono_literals;
         SimDuration minDuration{10s};
         for (auto const& link : net.links(this))
         {
@@ -549,7 +548,7 @@ struct Peer
             const bool proposing = mode == ConsensusMode::proposing;
             const bool consensusFail = result.state == ConsensusState::MovedOn;
 
-            TxSet const acceptedTxs = injectTxs(prevLedger, result.set);
+            TxSet const acceptedTxs = injectTxs(prevLedger, result.txns);
             Ledger const newLedger = oracle.accept(
                 prevLedger,
                 acceptedTxs.txs(),

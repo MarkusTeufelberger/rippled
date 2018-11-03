@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/json/json_writer.h>
 #include <cassert>
 #include <iomanip>
@@ -182,9 +181,6 @@ std::string valueToQuotedString ( const char* value )
 // Class FastWriter
 // //////////////////////////////////////////////////////////////////
 
-FastWriter::FastWriter ()
-{
-}
 
 std::string
 FastWriter::write ( const Value& root )

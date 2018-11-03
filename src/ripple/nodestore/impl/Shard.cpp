@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/nodestore/impl/Shard.h>
 #include <ripple/app/ledger/InboundLedger.h>
 #include <ripple/nodestore/impl/DatabaseShardImp.h>
@@ -28,103 +27,139 @@
 namespace ripple {
 namespace NodeStore {
 
-Shard::Shard(std::uint32_t index, int cacheSz,
-    PCache::clock_type::rep cacheAge,
-    beast::Journal& j)
+Shard::Shard(DatabaseShard const& db, std::uint32_t index,
+    int cacheSz, std::chrono::seconds cacheAge, beast::Journal& j)
     : index_(index)
-    , firstSeq_(std::max(genesisSeq,
-        DatabaseShard::firstSeq(index)))
-    , lastSeq_(std::max(firstSeq_,
-        DatabaseShard::lastSeq(index)))
+    , firstSeq_(db.firstLedgerSeq(index))
+    , lastSeq_(std::max(firstSeq_, db.lastLedgerSeq(index)))
+    , maxLedgers_(index == db.earliestShardIndex() ?
+        lastSeq_ - firstSeq_ + 1 : db.ledgersPerShard())
     , pCache_(std::make_shared<PCache>(
         "shard " + std::to_string(index_),
         cacheSz, cacheAge, stopwatch(), j))
     , nCache_(std::make_shared<NCache>(
         "shard " + std::to_string(index_),
         stopwatch(), cacheSz, cacheAge))
+    , dir_(db.getRootDir() / std::to_string(index_))
+    , control_(dir_ / controlFileName)
     , j_(j)
 {
-    if (index_ < DatabaseShard::seqToShardIndex(genesisSeq))
+    if (index_ < db.earliestShardIndex())
         Throw<std::runtime_error>("Shard: Invalid index");
 }
 
 bool
-Shard::open(Section config, Scheduler& scheduler,
-    boost::filesystem::path dir)
+Shard::open(Section config, Scheduler& scheduler)
 {
     assert(!backend_);
     using namespace boost::filesystem;
-    dir_ = dir / std::to_string(index_);
-    config.set("path", dir_.string());
-    auto newShard {!is_directory(dir_) || is_empty(dir_)};
+
+    bool dirPreexist;
+    bool dirEmpty;
     try
     {
-        backend_ = Manager::instance().make_Backend(
-            config, scheduler, j_);
-        backend_->open();
+        if (!exists(dir_))
+        {
+            dirPreexist = false;
+            dirEmpty = true;
+        }
+        else if (is_directory(dir_))
+        {
+            dirPreexist = true;
+            dirEmpty = is_empty(dir_);
+        }
+        else
+        {
+             JLOG(j_.error()) <<
+                "path exists as file: " << dir_.string();
+            return false;
+        }
     }
     catch (std::exception const& e)
     {
         JLOG(j_.error()) <<
-            "shard " << index_ <<
-            " exception: " << e.what();
+            "shard " + std::to_string(index_) + " exception: " + e.what();
         return false;
     }
 
-    if (backend_->fdlimit() == 0)
-        return true;
+    auto fail = [&](std::string msg)
+    {
+        JLOG(j_.error()) <<
+            "shard " << std::to_string(index_) << " error: " << msg;
 
-    control_ = dir_ / controlFileName;
-    if (newShard)
-    {
-        if (!saveControl())
-            return false;
-    }
-    else if (is_regular_file(control_))
-    {
-        std::ifstream ifs(control_.string());
-        if (!ifs.is_open())
+        if (!dirPreexist)
+            removeAll(dir_, j_);
+        else if (dirEmpty)
         {
-            JLOG(j_.error()) <<
-                "shard " << index_ <<
-                " unable to open control file";
-            return false;
+            for (auto const& p : recursive_directory_iterator(dir_))
+                removeAll(p.path(), j_);
         }
-        boost::archive::text_iarchive ar(ifs);
-        ar & storedSeqs_;
-        if (!storedSeqs_.empty())
+        return false;
+    };
+
+    config.set("path", dir_.string());
+    try
+    {
+        backend_ = Manager::instance().make_Backend(
+            config, scheduler, j_);
+        backend_->open(!dirPreexist || dirEmpty);
+
+        if (backend_->fdlimit() == 0)
+            return true;
+
+        if (!dirPreexist || dirEmpty)
         {
-            if (boost::icl::first(storedSeqs_) < firstSeq_ ||
-                boost::icl::last(storedSeqs_) > lastSeq_)
+            // New shard, create a control file
+            if (!saveControl())
+                return fail("failure");
+        }
+        else if (is_regular_file(control_))
+        {
+            // Incomplete shard, inspect control file
+            std::ifstream ifs(control_.string());
+            if (!ifs.is_open())
             {
-                JLOG(j_.error()) <<
-                    "shard " << index_ <<
-                    " invalid control file";
-                return false;
+                return fail("shard " + std::to_string(index_) +
+                    ", unable to open control file");
             }
 
-            auto const genesisShardIndex {
-                DatabaseShard::seqToShardIndex(genesisSeq)};
-            auto const genesisNumLedgers {
-                DatabaseShard::ledgersPerShard() - (
-                    genesisSeq - DatabaseShardImp::firstSeq(
-                        genesisShardIndex))};
-            if (boost::icl::length(storedSeqs_) ==
-                (index_ == genesisShardIndex ? genesisNumLedgers :
-                    DatabaseShard::ledgersPerShard()))
+            boost::archive::text_iarchive ar(ifs);
+            ar & storedSeqs_;
+            if (!storedSeqs_.empty())
             {
-                JLOG(j_.error()) <<
-                    "shard " << index_ <<
-                    " found control file for complete shard";
-                storedSeqs_.clear();
-                remove(control_);
-                complete_ = true;
+                if (boost::icl::first(storedSeqs_) < firstSeq_ ||
+                    boost::icl::last(storedSeqs_) > lastSeq_)
+                {
+                    return fail("shard " + std::to_string(index_) +
+                        ": Invalid control file");
+                }
+
+                if (boost::icl::length(storedSeqs_) >= maxLedgers_)
+                {
+                    JLOG(j_.error()) <<
+                        "shard " << index_ <<
+                        " found control file for complete shard";
+                    storedSeqs_.clear();
+                    complete_ = true;
+                    remove_all(control_);
+                }
             }
         }
+        else
+            complete_ = true;
+
+        // Calculate file foot print of backend files
+        for (auto const& p : recursive_directory_iterator(dir_))
+            if (!is_directory(p))
+                fileSize_ += file_size(p);
     }
-    else
-        complete_ = true;
-    updateFileSize();
+    catch (std::exception const& e)
+    {
+        JLOG(j_.error()) <<
+            "shard " << std::to_string(index_) << " error: " << e.what();
+        return false;
+    }
+
     return true;
 }
 
@@ -140,26 +175,38 @@ Shard::setStored(std::shared_ptr<Ledger const> const& l)
             " already stored";
         return false;
     }
-    auto const genesisShardIndex {
-        DatabaseShard::seqToShardIndex(genesisSeq)};
-    auto const genesisNumLedgers {
-        DatabaseShard::ledgersPerShard() - (
-            genesisSeq - DatabaseShardImp::firstSeq(
-                genesisShardIndex))};
-    if (boost::icl::length(storedSeqs_) >=
-        (index_ == genesisShardIndex ? genesisNumLedgers :
-            DatabaseShard::ledgersPerShard()) - 1)
+    if (boost::icl::length(storedSeqs_) >= maxLedgers_ - 1)
     {
         if (backend_->fdlimit() != 0)
         {
-            remove(control_);
-            updateFileSize();
+            if (!removeAll(control_, j_))
+                return false;
+
+            // Update file foot print of backend files
+            using namespace boost::filesystem;
+            std::uint64_t sz {0};
+            try
+            {
+                for (auto const& p : recursive_directory_iterator(dir_))
+                    if (!is_directory(p))
+                        sz += file_size(p);
+            }
+            catch (const filesystem_error& e)
+            {
+                JLOG(j_.error()) <<
+                    "exception: " << e.what();
+                fileSize_ = std::max(fileSize_, sz);
+                return false;
+            }
+            fileSize_ = sz;
         }
         complete_ = true;
         storedSeqs_.clear();
 
         JLOG(j_.debug()) <<
-            "shard " << index_ << " complete";
+            "shard " << index_ <<
+            " ledger seq " << l->info().seq <<
+            " stored. Shard complete";
     }
     else
     {
@@ -167,12 +214,12 @@ Shard::setStored(std::shared_ptr<Ledger const> const& l)
         lastStored_ = l;
         if (backend_->fdlimit() != 0 && !saveControl())
             return false;
-    }
 
-    JLOG(j_.debug()) <<
-        "shard " << index_ <<
-        " ledger seq " << l->info().seq <<
-        " stored";
+        JLOG(j_.debug()) <<
+            "shard " << index_ <<
+            " ledger seq " << l->info().seq <<
+            " stored";
+    }
 
     return true;
 }
@@ -195,7 +242,7 @@ Shard::contains(std::uint32_t seq) const
     return boost::icl::contains(storedSeqs_, seq);
 }
 
-void
+bool
 Shard::validate(Application& app)
 {
     uint256 hash;
@@ -205,13 +252,13 @@ Shard::validate(Application& app)
     {
         std::tie(l, seq, hash) = loadLedgerHelper(
             "WHERE LedgerSeq >= " + std::to_string(lastSeq_) +
-            " order by LedgerSeq desc limit 1", app);
+            " order by LedgerSeq desc limit 1", app, false);
         if (!l)
         {
-            JLOG(j_.fatal()) <<
+            JLOG(j_.error()) <<
                 "shard " << index_ <<
                 " unable to validate. No lookup data";
-            return;
+            return false;
         }
         if (seq != lastSeq_)
         {
@@ -223,30 +270,31 @@ Shard::validate(Application& app)
             }
             catch (std::exception const& e)
             {
-                JLOG(j_.fatal()) <<
+                JLOG(j_.error()) <<
                     "exception: " << e.what();
-                return;
+                return false;
             }
             if (!h)
             {
-                JLOG(j_.fatal()) <<
+                JLOG(j_.error()) <<
                     "shard " << index_ <<
                     " No hash for last ledger seq " << lastSeq_;
-                return;
+                return false;
             }
             hash = *h;
             seq = lastSeq_;
         }
     }
 
-    JLOG(j_.fatal()) <<
+    JLOG(j_.debug()) <<
         "Validating shard " << index_ <<
         " ledgers " << firstSeq_ <<
         "-" << lastSeq_;
 
     // Use a short age to keep memory consumption low
-    PCache::clock_type::rep const savedAge {pCache_->getTargetAge()};
-    pCache_->setTargetAge(1);
+    auto const savedAge {pCache_->getTargetAge()};
+    using namespace std::chrono_literals;
+    pCache_->setTargetAge(1s);
 
     // Validate every ledger stored in this shard
     std::shared_ptr<Ledger const> next;
@@ -260,7 +308,7 @@ Shard::validate(Application& app)
                 true), app.config(), *app.shardFamily());
         if (l->info().hash != hash || l->info().seq != seq)
         {
-            JLOG(j_.fatal()) <<
+            JLOG(j_.error()) <<
                 "ledger seq " << seq <<
                 " hash " << hash <<
                 " cannot be a ledger";
@@ -272,7 +320,7 @@ Shard::validate(Application& app)
         if (!l->stateMap().fetchRoot(
             SHAMapHash {l->info().accountHash}, nullptr))
         {
-            JLOG(j_.fatal()) <<
+            JLOG(j_.error()) <<
                 "ledger seq " << seq <<
                 " missing Account State root";
             break;
@@ -282,7 +330,7 @@ Shard::validate(Application& app)
             if (!l->txMap().fetchRoot(
                 SHAMapHash {l->info().txHash}, nullptr))
             {
-                JLOG(j_.fatal()) <<
+                JLOG(j_.error()) <<
                     "ledger seq " << seq <<
                     " missing TX root";
                 break;
@@ -296,30 +344,25 @@ Shard::validate(Application& app)
         if (seq % 128 == 0)
             pCache_->sweep();
     }
-    if (seq < firstSeq_)
-    {
-        JLOG(j_.fatal()) <<
-            "shard " << index_ <<
-            " is complete.";
-    }
-    else if (complete_)
-    {
-        JLOG(j_.fatal()) <<
-            "shard " << index_ <<
-            " is invalid, failed on seq " << seq <<
-            " hash " << hash;
-    }
-    else
-    {
-        JLOG(j_.fatal()) <<
-            "shard " << index_ <<
-            " is incomplete, stopped at seq " << seq <<
-            " hash " << hash;
-    }
 
     pCache_->reset();
     nCache_->reset();
     pCache_->setTargetAge(savedAge);
+
+    if (seq >= firstSeq_)
+    {
+        JLOG(j_.error()) <<
+            "shard " << index_ <<
+            (complete_ ? " is invalid, failed" : " is incomplete, stopped") <<
+            " at seq " << seq <<
+            " hash " << hash;
+        return false;
+    }
+
+    JLOG(j_.debug()) <<
+        "shard " << index_ <<
+        " is complete.";
+    return true;
 }
 
 bool
@@ -328,7 +371,7 @@ Shard::valLedger(std::shared_ptr<Ledger const> const& l,
 {
     if (l->info().hash.isZero() || l->info().accountHash.isZero())
     {
-        JLOG(j_.fatal()) <<
+        JLOG(j_.error()) <<
             "invalid ledger";
         return false;
     }
@@ -356,7 +399,7 @@ Shard::valLedger(std::shared_ptr<Ledger const> const& l,
         }
         catch (std::exception const& e)
         {
-            JLOG(j_.fatal()) <<
+            JLOG(j_.error()) <<
                 "exception: " << e.what();
             return false;
         }
@@ -378,7 +421,7 @@ Shard::valLedger(std::shared_ptr<Ledger const> const& l,
         }
         catch (std::exception const& e)
         {
-            JLOG(j_.fatal()) <<
+            JLOG(j_.error()) <<
                 "exception: " << e.what();
             return false;
         }
@@ -401,39 +444,29 @@ Shard::valFetch(uint256 const& hash)
             break;
         case notFound:
         {
-            JLOG(j_.fatal()) <<
+            JLOG(j_.error()) <<
                 "NodeObject not found. hash " << hash;
             break;
         }
         case dataCorrupt:
         {
-            JLOG(j_.fatal()) <<
+            JLOG(j_.error()) <<
                 "NodeObject is corrupt. hash " << hash;
             break;
         }
         default:
         {
-            JLOG(j_.fatal()) <<
+            JLOG(j_.error()) <<
                 "unknown error. hash " << hash;
         }
         }
     }
     catch (std::exception const& e)
     {
-        JLOG(j_.fatal()) <<
+        JLOG(j_.error()) <<
             "exception: " << e.what();
     }
     return nObj;
-}
-
-void
-Shard::updateFileSize()
-{
-    fileSize_ = 0;
-    using namespace boost::filesystem;
-    for (auto const& d : directory_iterator(dir_))
-        if (is_regular_file(d))
-            fileSize_ += file_size(d);
 }
 
 bool

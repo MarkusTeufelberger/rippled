@@ -85,6 +85,8 @@ enum LedgerEntryType
 
     ltCHECK             = 'C',
 
+    ltDEPOSIT_PREAUTH   = 'p',
+
     // No longer used or supported. Left here to prevent accidental
     // reassignment of the ledger type.
     ltNICKNAME          = 'n',
@@ -114,6 +116,7 @@ enum LedgerNameSpace
     spaceSignerList     = 'S',
     spaceXRPUChannel    = 'x',
     spaceCheck          = 'C',
+    spaceDepositPreauth = 'p',
 
     // No longer used or supported. Left here to reserve the space and
     // avoid accidental reuse of the space.
@@ -149,6 +152,9 @@ enum LedgerSpecificFlags
     lsfHighNoRipple     = 0x00200000,
     lsfLowFreeze        = 0x00400000,   // True, low side has set freeze flag
     lsfHighFreeze       = 0x00800000,   // True, high side has set freeze flag
+
+    // ltSIGNER_LIST
+    lsfOneOwnerCount    = 0x00010000,   // True, uses only one OwnerCount
 };
 
 //------------------------------------------------------------------------------
@@ -164,7 +170,7 @@ public:
     static LedgerFormats const& getInstance ();
 
 private:
-    void addCommonFields (Item& item);
+    void addCommonFields (Item& item) override;
 };
 
 } // ripple

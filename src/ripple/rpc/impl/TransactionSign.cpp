@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/rpc/impl/TransactionSign.h>
 #include <ripple/app/ledger/LedgerMaster.h>
 #include <ripple/app/ledger/OpenLedger.h>
@@ -328,7 +327,7 @@ struct transactionPreProcessResult
     , second ()
     { }
 
-    transactionPreProcessResult (std::shared_ptr<STTx>&& st)
+    explicit transactionPreProcessResult (std::shared_ptr<STTx>&& st)
     : first ()
     , second (std::move (st))
     { }
@@ -708,10 +707,10 @@ Json::Value checkFee (
         {
             auto const baseFee = ledger->fees().base;
             auto escalatedFee = mulDiv(
-                metrics->expFeeLevel, baseFee,
+                metrics->openLedgerFeeLevel, baseFee,
                     metrics->referenceFeeLevel).second;
             if (mulDiv(escalatedFee, metrics->referenceFeeLevel,
-                    baseFee).second < metrics->expFeeLevel)
+                    baseFee).second < metrics->openLedgerFeeLevel)
                 ++escalatedFee;
             fee = std::max(fee, escalatedFee);
         }

@@ -28,13 +28,13 @@ class CashCheck
     : public Transactor
 {
 public:
-    CashCheck (ApplyContext& ctx)
+    explicit CashCheck (ApplyContext& ctx)
         : Transactor (ctx)
     {
     }
 
     static
-    TER
+    NotTEC
     preflight (PreflightContext const& ctx);
 
     static

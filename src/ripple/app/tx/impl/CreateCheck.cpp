@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/app/tx/impl/CreateCheck.h>
 #include <ripple/app/ledger/Ledger.h>
 #include <ripple/basics/Log.h>
@@ -29,13 +28,13 @@
 
 namespace ripple {
 
-TER
+NotTEC
 CreateCheck::preflight (PreflightContext const& ctx)
 {
     if (! ctx.rules.enabled (featureChecks))
         return temDISABLED;
 
-    TER const ret {preflight1 (ctx)};
+    NotTEC const ret {preflight1 (ctx)};
     if (! isTesSuccess (ret))
         return ret;
 

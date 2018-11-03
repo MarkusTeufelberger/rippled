@@ -71,36 +71,68 @@ public:
         bool checkSignature)
         : STObject(getFormat(), sit, sfValidation)
     {
-        mNodeID =
-            lookupNodeID(PublicKey(makeSlice(getFieldVL(sfSigningPubKey))));
-        assert(mNodeID.isNonZero());
+        auto const spk = getFieldVL(sfSigningPubKey);
 
-        if (checkSignature && !isValid())
+        if (publicKeyType(makeSlice(spk)) != KeyType::secp256k1)
         {
-            JLOG(debugLog().error()) << "Invalid validation" << getJson(0);
-            Throw<std::runtime_error>("Invalid validation");
+            JLOG (debugLog().error())
+                << "Invalid public key in validation" << getJson (0);
+            Throw<std::runtime_error> ("Invalid public key in validation");
         }
+
+        if  (checkSignature && !isValid ())
+        {
+            JLOG (debugLog().error())
+                << "Invalid signature in validation" << getJson (0);
+            Throw<std::runtime_error> ("Invalid signature in validation");
+        }
+
+        mNodeID = lookupNodeID(PublicKey(makeSlice(spk)));
+        assert(mNodeID.isNonZero());
     }
 
-    /** Construct a new STValidation
+    /** Fees to set when issuing a new validation.
 
-        Constructs a new STValidation issued by a node. The instance should be
-        signed before sharing with other nodes.
+        Optional fees to include when issuing a new validation
+    */
+    struct FeeSettings
+    {
+        boost::optional<std::uint32_t> loadFee;
+        boost::optional<std::uint64_t> baseFee;
+        boost::optional<std::uint32_t> reserveBase;
+        boost::optional<std::uint32_t> reserveIncrement;
+    };
+
+    /** Construct, sign and trust a new STValidation
+
+        Constructs, signs and trusts new STValidation issued by this node.
 
         @param ledgerHash The hash of the validated ledger
+        @param ledgerSeq The sequence number (index) of the ledger
+        @param consensusHash The hash of the consensus transaction set
         @param signTime When the validation is signed
         @param publicKey The current signing public key
+        @param secretKey The current signing secret key
         @param nodeID ID corresponding to node's public master key
         @param isFull Whether the validation is full or partial
+        @param fee FeeSettings to include in the validation
+        @param amendments If not empty, the amendments to include in this validation
 
+        @note The fee and amendment settings are only set if not boost::none.
+              Typically, the amendments and fees are set for validations of flag
+              ledgers only.
     */
-
     STValidation(
         uint256 const& ledgerHash,
+        std::uint32_t ledgerSeq,
+        uint256 const& consensusHash,
         NetClock::time_point signTime,
         PublicKey const& publicKey,
+        SecretKey const& secretKey,
         NodeID const& nodeID,
-        bool isFull);
+        bool isFull,
+        FeeSettings const& fees,
+        std::vector<uint256> const& amendments);
 
     STBase*
     copy(std::size_t n, void* buf) const override
@@ -114,17 +146,19 @@ public:
         return emplace(n, buf, std::move(*this));
     }
 
+    // Hash of the validated ledger
     uint256
     getLedgerHash() const;
+
+    // Hash of consensus transaction set used to generate ledger
+    uint256
+    getConsensusHash() const;
 
     NetClock::time_point
     getSignTime() const;
 
     NetClock::time_point
     getSeenTime() const;
-
-    std::uint32_t
-    getFlags() const;
 
     PublicKey
     getSignerPublic() const;
@@ -177,11 +211,8 @@ public:
     Blob
     getSignature() const;
 
-    // Signs the validation and returns the signing hash
-    uint256
-    sign(SecretKey const& secretKey);
-
 private:
+
     static SOTemplate const&
     getFormat();
 

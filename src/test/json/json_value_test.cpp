@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/json/json_value.h>
 #include <ripple/json/json_reader.h>
 #include <ripple/json/json_writer.h>
@@ -297,7 +296,7 @@ struct json_value_test : beast::unit_test::suite
         }
     }
 
-    void run ()
+    void run () override
     {
         test_bool ();
         test_bad_json ();

@@ -60,9 +60,11 @@ brew install git cmake pkg-config protobuf openssl ninja
 
 ### Build Boost
 
+Boost 1.67 or later is required.
+
 We want to compile boost with clang/libc++
 
-Download [a release](https://dl.bintray.com/boostorg/release/1.66.0/source/boost_1_66_0.tar.bz2)
+Download [a release](https://dl.bintray.com/boostorg/release/1.68.0/source/boost_1_68_0.tar.bz2)
 
 Extract it to a folder, making note of where, open a terminal, then:
 
@@ -118,11 +120,11 @@ If you didn't persistently set the `BOOST_ROOT` environment variable to the
 root of the extracted directory above, then you should set it temporarily.
 
 For example, assuming your username were `Abigail` and you extracted Boost
-1.66.0 in `/Users/Abigail/Downloads/boost_1_66_0`, you would do for any
+1.68.0 in `/Users/Abigail/Downloads/boost_1_68_0`, you would do for any
 shell in which you want to build:
 
 ```
-export BOOST_ROOT=/Users/Abigail/Downloads/boost_1_66_0
+export BOOST_ROOT=/Users/Abigail/Downloads/boost_1_68_0
 ```
 
 ### Generate and Build
@@ -140,20 +142,17 @@ cd my_build
 followed by:
 
 ```
-cmake -G "Unix Makefiles" -Dtarget=clang.debug.unity ..
+cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Debug ..
 ```
 
 or
 
 ```
-cmake -G "Ninja" -Dtarget=clang.debug.unity ..
+cmake -G "Ninja" -DCMAKE_BUILD_TYPE=Debug ..
 ```
 
-The target variable can be adjusted as needed for `debug` vs. `release` and
-`unity` vs. `nounity` builds. `unity` builds are typically faster to compile
-but run the risk of ODR violations given that multiple compilation units are
-merged together at compile time. `nounity` builds will take longer to compile
-but align more closely with language standards. 
+`CMAKE_BUILD_TYPE` can be changed as desired for `Debug` vs.
+`Release` builds (all four standard cmake build types are supported).
 
 Once you have generated the build system, you can run the build via cmake:
 
@@ -187,15 +186,41 @@ cmake --build . -- -jobs 4
 This will invoke the `xcodebuild` utility to compile the project. See `xcodebuild
 --help` for details about build options.
 
+#### Optional installation
+
+If you'd like to install the artifacts of the build, we have preliminary
+support for standard CMake installation targets. We recommend explicitly
+setting the installation location when configuring, e.g.:
+
+```
+cmake -DCMAKE_INSTALL_PREFIX=/opt/local ..
+```
+
+(change the destination as desired), and then build the `install` target:
+
+```
+cmake --build . --target install -- -jobs 4
+```
+
 #### Options During Configuration:
 
-There are a number of config variables that our CMake files support. These
-can be added to the cmake generation command as needed:
+The CMake file defines a number of configure-time options which can be
+examined by running `cmake-gui` or `ccmake` to generated the build. In
+particular, the `unity` option allows you to select between the unity and
+non-unity builds. `unity` builds are faster to compile since they combine
+multiple sources into a single compiliation unit - this is the default if you
+don't specify. `nounity` builds can be helpful for detecting include omissions
+or for finding other build-related issues, but aren't generally needed for
+testing and running.
 
+* `-Dunity=ON` to enable/disable unity builds (defaults to ON) 
 * `-Dassert=ON` to enable asserts
 * `-Djemalloc=ON` to enable jemalloc support for heap checking
 * `-Dsan=thread` to enable the thread sanitizer with clang
 * `-Dsan=address` to enable the address sanitizer with clang
+
+Several other infrequently used options are available - run `ccmake` or
+`cmake-gui` for a list of all options.
 
 ## Unit Tests (Recommended)
 

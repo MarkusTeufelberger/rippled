@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/protocol/STValidation.h>
 #include <ripple/protocol/HashPrefix.h>
 #include <ripple/basics/contract.h>
@@ -28,31 +27,53 @@ namespace ripple {
 
 STValidation::STValidation(
     uint256 const& ledgerHash,
+    std::uint32_t ledgerSeq,
+    uint256 const& consensusHash,
     NetClock::time_point signTime,
     PublicKey const& publicKey,
+    SecretKey const& secretKey,
     NodeID const& nodeID,
-    bool isFull)
+    bool isFull,
+    FeeSettings const& fees,
+    std::vector<uint256> const& amendments)
     : STObject(getFormat(), sfValidation), mNodeID(nodeID), mSeen(signTime)
 {
-    // Does not sign
-    setFieldH256 (sfLedgerHash, ledgerHash);
-    setFieldU32 (sfSigningTime, signTime.time_since_epoch().count());
+    // This is our own public key and it should always be valid.
+    if (!publicKeyType(publicKey))
+        LogicError("Invalid validation public key");
+    assert(mNodeID.isNonZero());
+    setFieldH256(sfLedgerHash, ledgerHash);
+    setFieldH256(sfConsensusHash, consensusHash);
+    setFieldU32(sfSigningTime, signTime.time_since_epoch().count());
 
-    setFieldVL (sfSigningPubKey, publicKey.slice());
-    assert (mNodeID.isNonZero ());
-
+    setFieldVL(sfSigningPubKey, publicKey.slice());
     if (isFull)
-        setFlag (kFullFlag);
-}
+        setFlag(kFullFlag);
 
-uint256 STValidation::sign (SecretKey const& secretKey)
-{
-    setFlag (vfFullyCanonicalSig);
+    setFieldU32(sfLedgerSequence, ledgerSeq);
+
+    if (fees.loadFee)
+        setFieldU32(sfLoadFee, *fees.loadFee);
+
+    if (fees.baseFee)
+        setFieldU64(sfBaseFee, *fees.baseFee);
+
+    if (fees.reserveBase)
+        setFieldU32(sfReserveBase, *fees.reserveBase);
+
+    if (fees.reserveIncrement)
+        setFieldU32(sfReserveIncrement, *fees.reserveIncrement);
+
+    if (!amendments.empty())
+        setFieldV256(sfAmendments, STVector256(sfAmendments, amendments));
+
+    setFlag(vfFullyCanonicalSig);
 
     auto const signingHash = getSigningHash();
-    setFieldVL (sfSignature,
-        signDigest (getSignerPublic(), secretKey, signingHash));
-    return signingHash;
+    setFieldVL(
+        sfSignature, signDigest(getSignerPublic(), secretKey, signingHash));
+
+    setTrusted();
 }
 
 uint256 STValidation::getSigningHash () const
@@ -63,6 +84,11 @@ uint256 STValidation::getSigningHash () const
 uint256 STValidation::getLedgerHash () const
 {
     return getFieldH256 (sfLedgerHash);
+}
+
+uint256 STValidation::getConsensusHash () const
+{
+    return getFieldH256 (sfConsensusHash);
 }
 
 NetClock::time_point
@@ -76,11 +102,6 @@ NetClock::time_point STValidation::getSeenTime () const
     return mSeen;
 }
 
-std::uint32_t STValidation::getFlags () const
-{
-    return getFieldU32 (sfFlags);
-}
-
 bool STValidation::isValid () const
 {
     return isValid (getSigningHash ());
@@ -90,6 +111,9 @@ bool STValidation::isValid (uint256 const& signingHash) const
 {
     try
     {
+        if (publicKeyType(getSignerPublic()) != KeyType::secp256k1)
+            return false;
+
         return verifyDigest (getSignerPublic(),
             signingHash,
             makeSlice(getFieldVL (sfSignature)),
@@ -146,6 +170,8 @@ SOTemplate const& STValidation::getFormat ()
             format.push_back (SOElement (sfSigningPubKey,   SOE_REQUIRED));
             format.push_back (SOElement (sfSignature,       SOE_OPTIONAL));
             format.push_back (SOElement (sfConsensusHash,   SOE_OPTIONAL));
+            format.push_back (SOElement (sfCookie,          SOE_OPTIONAL));
+
         }
     };
 

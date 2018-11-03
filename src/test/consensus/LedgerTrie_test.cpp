@@ -16,7 +16,6 @@
     OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 */
 //==============================================================================
-#include <BeastConfig.h>
 #include <ripple/beast/unit_test.h>
 #include <ripple/consensus/LedgerTrie.h>
 #include <test/csf/ledgers.h>
@@ -28,9 +27,6 @@ namespace test {
 
 class LedgerTrie_test : public beast::unit_test::suite
 {
-    beast::Journal j;
-
-
     void
     testInsert()
     {
@@ -647,7 +643,7 @@ class LedgerTrie_test : public beast::unit_test::suite
     }
 
     void
-    run()
+    run() override
     {
         testInsert();
         testRemove();

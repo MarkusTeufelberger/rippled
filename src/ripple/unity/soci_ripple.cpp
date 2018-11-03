@@ -17,7 +17,5 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 
-#include <ripple/core/impl/DummySociDynamicBackend.cpp>
 #include <ripple/core/impl/SociDB.cpp>

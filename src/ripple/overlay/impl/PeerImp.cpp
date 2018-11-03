@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/overlay/impl/PeerImp.h>
 #include <ripple/overlay/impl/Tuning.h>
 #include <ripple/app/consensus/RCLValidations.h>
@@ -31,11 +30,12 @@
 #include <ripple/app/misc/ValidatorList.h>
 #include <ripple/app/tx/apply.h>
 #include <ripple/basics/random.h>
-#include <ripple/basics/UptimeTimer.h>
+#include <ripple/basics/UptimeClock.h>
 #include <ripple/beast/core/LexicalCast.h>
 #include <ripple/beast/core/SemanticVersion.h>
 #include <ripple/nodestore/DatabaseShard.h>
 #include <ripple/overlay/Cluster.h>
+#include <ripple/overlay/predicates.h>
 #include <ripple/protocol/digest.h>
 
 #include <boost/algorithm/string/predicate.hpp>
@@ -145,6 +145,11 @@ PeerImp::run()
         doProtocolStart();
     }
 
+    // Request shard info from peer
+    protocol::TMGetShardInfo tmGS;
+    tmGS.set_hops(0);
+    send(std::make_shared<Message>(tmGS, protocol::mtGET_SHARD_INFO));
+
     setTimer();
 }
 
@@ -238,7 +243,7 @@ PeerImp::crawl() const
     auto const iter = headers_.find("Crawl");
     if (iter == headers_.end())
         return false;
-    return beast::detail::iequals(iter->value(), "public");
+    return boost::beast::detail::iequals(iter->value(), "public");
 }
 
 std::string
@@ -256,7 +261,7 @@ PeerImp::json()
     Json::Value ret (Json::objectValue);
 
     ret[jss::public_key]   = toBase58 (
-        TokenType::TOKEN_NODE_PUBLIC, publicKey_);
+        TokenType::NodePublic, publicKey_);
     ret[jss::address]      = remote_address_.to_string();
 
     if (m_inbound)
@@ -304,7 +309,7 @@ PeerImp::json()
         ret[jss::complete_ledgers] = std::to_string(minSeq) +
             " - " + std::to_string(maxSeq);
 
-    if (closedLedgerHash_ != zero)
+    if (closedLedgerHash_ != beast::zero)
         ret[jss::ledger] = to_string (closedLedgerHash_);
 
     switch (sanity_.load ())
@@ -361,15 +366,20 @@ PeerImp::json()
 bool
 PeerImp::hasLedger (uint256 const& hash, std::uint32_t seq) const
 {
-    std::lock_guard<std::mutex> sl(recentLock_);
-    if ((seq != 0) && (seq >= minLedger_) && (seq <= maxLedger_) &&
-            (sanity_.load() == Sanity::sane))
-        return true;
-    if (std::find(recentLedgers_.begin(),
-            recentLedgers_.end(), hash) != recentLedgers_.end())
-        return true;
-    return seq != 0 && boost::icl::contains(
-        shards_, NodeStore::DatabaseShard::seqToShardIndex(seq));
+    {
+        std::lock_guard<std::mutex> sl(recentLock_);
+        if ((seq != 0) && (seq >= minLedger_) && (seq <= maxLedger_) &&
+                (sanity_.load() == Sanity::sane))
+            return true;
+        if (std::find(recentLedgers_.begin(),
+                recentLedgers_.end(), hash) != recentLedgers_.end())
+            return true;
+    }
+
+    if (seq >= app_.getNodeStore().earliestSeq())
+        return hasShard(
+            (seq - 1) / NodeStore::DatabaseShard::ledgersPerShardDefault);
+    return false;
 }
 
 void
@@ -385,19 +395,11 @@ PeerImp::ledgerRange (std::uint32_t& minSeq,
 bool
 PeerImp::hasShard (std::uint32_t shardIndex) const
 {
-    std::lock_guard<std::mutex> sl(recentLock_);
-    return boost::icl::contains(shards_, shardIndex);
-}
-
-std::string
-PeerImp::getShards () const
-{
-    {
-        std::lock_guard<std::mutex> sl(recentLock_);
-        if (!shards_.empty())
-            return to_string(shards_);
-    }
-    return {};
+    std::lock_guard<std::mutex> l {shardInfoMutex_};
+    auto const it {shardInfo_.find(publicKey_)};
+    if (it != shardInfo_.end())
+        return boost::icl::contains(it->second.shardIndexes, shardIndex);
+    return false;
 }
 
 bool
@@ -476,6 +478,25 @@ PeerImp::fail(std::string const& name, error_code ec)
         JLOG(journal_.warn()) << name << ": " << ec.message();
     }
     close();
+}
+
+boost::optional<RangeSet<std::uint32_t>>
+PeerImp::getShardIndexes() const
+{
+    std::lock_guard<std::mutex> l {shardInfoMutex_};
+    auto it{shardInfo_.find(publicKey_)};
+    if (it != shardInfo_.end())
+        return it->second.shardIndexes;
+    return boost::none;
+}
+
+boost::optional<hash_map<PublicKey, PeerImp::ShardInfo>>
+PeerImp::getPeerShardInfo() const
+{
+    std::lock_guard<std::mutex> l {shardInfoMutex_};
+    if (!shardInfo_.empty())
+        return shardInfo_;
+    return boost::none;
 }
 
 void
@@ -621,7 +642,7 @@ void PeerImp::doAccept()
 
     // TODO Apply headers to connection state.
 
-    beast::ostream(write_buffer_) << makeResponse(
+    boost::beast::ostream(write_buffer_) << makeResponse(
         ! overlay_.peerFinder().config().peerPrivate,
             request_, remote_address_, *sharedValue);
 
@@ -629,7 +650,7 @@ void PeerImp::doAccept()
     JLOG(journal_.info()) << "Protocol: " << to_string(protocol);
     JLOG(journal_.info()) <<
         "Public Key: " << toBase58 (
-            TokenType::TOKEN_NODE_PUBLIC,
+            TokenType::NodePublic,
             publicKey_);
     if (auto member = app_.cluster().member(publicKey_))
     {
@@ -669,8 +690,8 @@ PeerImp::makeResponse (bool crawl,
     uint256 const& sharedValue)
 {
     http_response_type resp;
-    resp.result(beast::http::status::switching_protocols);
-    resp.version = req.version;
+    resp.result(boost::beast::http::status::switching_protocols);
+    resp.version(req.version());
     resp.insert("Connection", "Upgrade");
     resp.insert("Upgrade", "RTXP/1.2");
     resp.insert("Connect-As", "Peer");
@@ -724,11 +745,12 @@ PeerImp::doProtocolStart()
 
     app_.validatorManifests ().for_each_manifest (
         [&tm](std::size_t s){tm.mutable_list()->Reserve(s);},
-        [&tm](Manifest const& manifest)
+        [&tm, &hr = app_.getHashRouter()](Manifest const& manifest)
         {
             auto const& s = manifest.serialized;
             auto& tm_e = *tm.add_list();
             tm_e.set_stobject(s.data(), s.size());
+            hr.addSuppression(manifest.hash());
         });
 
     if (tm.list_size() > 0)
@@ -932,7 +954,7 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMCluster> const& m)
             name = node.nodename();
 
         auto const publicKey = parseBase58<PublicKey>(
-            TokenType::TOKEN_NODE_PUBLIC, node.publickey());
+            TokenType::NodePublic, node.publickey());
 
         // NIKB NOTE We should drop the peer immediately if
         // they send us a public key we can't parse
@@ -995,6 +1017,202 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMCluster> const& m)
 }
 
 void
+PeerImp::onMessage (std::shared_ptr <protocol::TMGetShardInfo> const& m)
+{
+    if (m->hops() > csHopLimit || m->peerchain_size() > csHopLimit)
+    {
+        fee_ = Resource::feeInvalidRequest;
+        JLOG(p_journal_.warn()) <<
+            (m->hops() > csHopLimit ?
+            "Hops (" + std::to_string(m->hops()) + ") exceed limit" :
+            "Invalid Peerchain");
+        return;
+    }
+
+    // Reply with shard info we may have
+    if (auto shardStore = app_.getShardStore())
+    {
+        fee_ = Resource::feeLightPeer;
+        auto shards {shardStore->getCompleteShards()};
+        if (!shards.empty())
+        {
+            protocol::TMShardInfo reply;
+            reply.set_shardindexes(shards);
+
+            if (m->has_lastlink())
+                reply.set_lastlink(true);
+
+            if (m->peerchain_size() > 0)
+                *reply.mutable_peerchain() = m->peerchain();
+
+            send(std::make_shared<Message>(reply, protocol::mtSHARD_INFO));
+
+            JLOG(p_journal_.trace()) <<
+                "Sent shard indexes " << shards;
+        }
+    }
+
+    // Relay request to peers
+    if (m->hops() > 0)
+    {
+        fee_ = Resource::feeMediumBurdenPeer;
+
+        m->set_hops(m->hops() - 1);
+        if (m->hops() == 0)
+            m->set_lastlink(true);
+
+        m->add_peerchain(id());
+        overlay_.foreach(send_if_not(
+            std::make_shared<Message>(*m, protocol::mtGET_SHARD_INFO),
+            match_peer(this)));
+    }
+}
+
+void
+PeerImp::onMessage(std::shared_ptr <protocol::TMShardInfo> const& m)
+{
+    if (m->shardindexes().empty() || m->peerchain_size() > csHopLimit)
+    {
+        fee_ = Resource::feeBadData;
+        JLOG(p_journal_.warn()) <<
+            (m->shardindexes().empty() ?
+            "Missing shard indexes" :
+            "Invalid Peerchain");
+        return;
+    }
+
+    // Check if the message should be forwarded to another peer
+    if (m->peerchain_size() > 0)
+    {
+        auto const peerId {m->peerchain(m->peerchain_size() - 1)};
+        if (auto peer = overlay_.findPeerByShortID(peerId))
+        {
+            if (!m->has_nodepubkey())
+                m->set_nodepubkey(publicKey_.data(), publicKey_.size());
+
+            if (!m->has_endpoint())
+            {
+                // Check if peer will share IP publicly
+                if (crawl())
+                    m->set_endpoint(remote_address_.address().to_string());
+                else
+                    m->set_endpoint("0");
+            }
+
+            m->mutable_peerchain()->RemoveLast();
+            peer->send(std::make_shared<Message>(*m, protocol::mtSHARD_INFO));
+
+            JLOG(p_journal_.trace()) <<
+                "Relayed TMShardInfo to peer with IP " <<
+                remote_address_.address().to_string();
+        }
+        else
+        {
+            // Peer is no longer available so the relay ends
+            fee_ = Resource::feeUnwantedData;
+            JLOG(p_journal_.info()) <<
+                "Unable to route shard info";
+        }
+        return;
+    }
+
+    // Parse the shard indexes received in the shard info
+    RangeSet<std::uint32_t> shardIndexes;
+    {
+        std::vector<std::string> tokens;
+        boost::split(tokens, m->shardindexes(), boost::algorithm::is_any_of(","));
+        for (auto const& t : tokens)
+        {
+            std::vector<std::string> seqs;
+            boost::split(seqs, t, boost::algorithm::is_any_of("-"));
+            if (seqs.empty() || seqs.size() > 2)
+            {
+                fee_ = Resource::feeBadData;
+                return;
+            }
+
+            std::uint32_t first;
+            if (!beast::lexicalCastChecked(first, seqs.front()))
+            {
+                fee_ = Resource::feeBadData;
+                return;
+            }
+
+            if (seqs.size() == 1)
+                shardIndexes.insert(first);
+            else
+            {
+                std::uint32_t second;
+                if (!beast::lexicalCastChecked(second, seqs.back()))
+                {
+                    fee_ = Resource::feeBadData;
+                    return;
+                }
+                shardIndexes.insert(range(first, second));
+            }
+        }
+    }
+
+    // Get the Public key of the node reporting the shard info
+    PublicKey publicKey;
+    if (m->has_nodepubkey())
+        publicKey = PublicKey(makeSlice(m->nodepubkey()));
+    else
+        publicKey = publicKey_;
+
+    // Get the IP of the node reporting the shard info
+    beast::IP::Endpoint endpoint;
+    if (m->has_endpoint())
+    {
+        if (m->endpoint() != "0")
+        {
+            auto result {
+                beast::IP::Endpoint::from_string_checked(m->endpoint())};
+            if (!result.second)
+            {
+                fee_ = Resource::feeBadData;
+                JLOG(p_journal_.warn()) <<
+                    "failed to parse incoming endpoint: {" <<
+                    m->endpoint() << "}";
+                return;
+            }
+            endpoint = std::move(result.first);
+        }
+    }
+    else if (crawl()) // Check if peer will share IP publicly
+        endpoint = remote_address_;
+
+    {
+        std::lock_guard<std::mutex> l {shardInfoMutex_};
+        auto it {shardInfo_.find(publicKey)};
+        if (it != shardInfo_.end())
+        {
+            // Update the IP address for the node
+            it->second.endpoint = std::move(endpoint);
+
+            // Join the shard index range set
+            it->second.shardIndexes += shardIndexes;
+        }
+        else
+        {
+            // Add a new node
+            ShardInfo shardInfo;
+            shardInfo.endpoint = std::move(endpoint);
+            shardInfo.shardIndexes = std::move(shardIndexes);
+            shardInfo_.emplace(publicKey, std::move(shardInfo));
+        }
+    }
+
+    JLOG(p_journal_.trace()) <<
+        "Consumed TMShardInfo originating from public key " <<
+        toBase58(TokenType::NodePublic, publicKey) <<
+        " shard indexes " << m->shardindexes();
+
+    if (m->has_lastlink())
+        overlay_.lastLink(id_);
+}
+
+void
 PeerImp::onMessage (std::shared_ptr <protocol::TMGetPeers> const& m)
 {
     // This message is obsolete due to PeerFinder and
@@ -1019,37 +1237,75 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMEndpoints> const& m)
 
     std::vector <PeerFinder::Endpoint> endpoints;
 
-    endpoints.reserve (m->endpoints().size());
-
-    for (int i = 0; i < m->endpoints ().size (); ++i)
+    if (m->endpoints_v2().size())
     {
-        PeerFinder::Endpoint endpoint;
-        protocol::TMEndpoint const& tm (m->endpoints(i));
-
-        // hops
-        endpoint.hops = tm.hops();
-
-        // ipv4
-        if (endpoint.hops > 0)
+        endpoints.reserve (m->endpoints_v2().size());
+        for (auto const& tm : m->endpoints_v2 ())
         {
-            in_addr addr;
-            addr.s_addr = tm.ipv4().ipv4();
-            beast::IP::AddressV4 v4 (ntohl (addr.s_addr));
-            endpoint.address = beast::IP::Endpoint (v4, tm.ipv4().ipv4port ());
-        }
-        else
-        {
-            // This Endpoint describes the peer we are connected to.
-            // We will take the remote address seen on the socket and
-            // store that in the IP::Endpoint. If this is the first time,
-            // then we'll verify that their listener can receive incoming
-            // by performing a connectivity test.
-            //
-            endpoint.address = remote_address_.at_port (
-                tm.ipv4().ipv4port ());
-        }
+            // these endpoint strings support ipv4 and ipv6
+            auto result = beast::IP::Endpoint::from_string_checked(tm.endpoint());
+            if (! result.second)
+            {
+                JLOG(p_journal_.error()) <<
+                    "failed to parse incoming endpoint: {" <<
+                    tm.endpoint() << "}";
+                continue;
+            }
 
-        endpoints.push_back (endpoint);
+            // If hops == 0, this Endpoint describes the peer we are connected
+            // to -- in that case, we take the remote address seen on the
+            // socket and store that in the IP::Endpoint. If this is the first
+            // time, then we'll verify that their listener can receive incoming
+            // by performing a connectivity test.  if hops > 0, then we just
+            // take the address/port we were given
+
+            endpoints.emplace_back(
+                tm.hops() > 0 ?
+                    result.first :
+                    remote_address_.at_port(result.first.port()),
+                tm.hops());
+            JLOG(p_journal_.trace()) <<
+                "got v2 EP: " << endpoints.back().address <<
+                ", hops = " << endpoints.back().hops;
+        }
+    }
+    else
+    {
+        // this branch can be removed once the entire network is operating with
+        // endpoint_v2() items (strings)
+        endpoints.reserve (m->endpoints().size());
+        for (int i = 0; i < m->endpoints ().size (); ++i)
+        {
+            PeerFinder::Endpoint endpoint;
+            protocol::TMEndpoint const& tm (m->endpoints(i));
+
+            // hops
+            endpoint.hops = tm.hops();
+
+            // ipv4
+            if (endpoint.hops > 0)
+            {
+                in_addr addr;
+                addr.s_addr = tm.ipv4().ipv4();
+                beast::IP::AddressV4 v4 (ntohl (addr.s_addr));
+                endpoint.address = beast::IP::Endpoint (v4, tm.ipv4().ipv4port ());
+            }
+            else
+            {
+                // This Endpoint describes the peer we are connected to.
+                // We will take the remote address seen on the socket and
+                // store that in the IP::Endpoint. If this is the first time,
+                // then we'll verify that their listener can receive incoming
+                // by performing a connectivity test.
+                //
+                endpoint.address = remote_address_.at_port (
+                    tm.ipv4().ipv4port ());
+            }
+            endpoints.push_back (endpoint);
+            JLOG(p_journal_.trace()) <<
+                "got v1 EP: " << endpoints.back().address <<
+                ", hops = " << endpoints.back().hops;
+        }
     }
 
     if (! endpoints.empty())
@@ -1228,10 +1484,6 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMProposeSet> const& m)
     if (set.has_hops() && ! slot_->cluster())
         set.set_hops(set.hops() + 1);
 
-    // VFALCO Magic numbers are bad
-    if ((set.closetime() + 180) < app_.timeKeeper().closeTime().time_since_epoch().count())
-        return;
-
     auto const type = publicKeyType(
         makeSlice(set.nodepubkey()));
 
@@ -1270,13 +1522,6 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMProposeSet> const& m)
     if (! app_.getHashRouter ().addSuppressionPeer (suppression, id_))
     {
         JLOG(p_journal_.trace()) << "Proposal: duplicate";
-        return;
-    }
-
-    if (!app_.getValidationPublicKey().empty() &&
-        publicKey == app_.getValidationPublicKey())
-    {
-        JLOG(p_journal_.trace()) << "Proposal: self";
         return;
     }
 
@@ -1386,26 +1631,6 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMStatusChange> const& m)
             minLedger_ = 0;
     }
 
-    if (m->has_shardseqs())
-    {
-        std::vector<std::string> tokens;
-        boost::split(tokens, m->shardseqs(), boost::algorithm::is_any_of(","));
-        std::lock_guard<std::mutex> sl(recentLock_);
-        shards_.clear();
-        for (auto const& t : tokens)
-        {
-            std::vector<std::string> seqs;
-            boost::split(seqs, t, boost::algorithm::is_any_of("-"));
-            if (seqs.size() == 1)
-                shards_.insert(
-                    beast::lexicalCastThrow<std::uint32_t>(seqs.front()));
-            else if (seqs.size() == 2)
-                shards_.insert(range(
-                    beast::lexicalCastThrow<std::uint32_t>(seqs.front()),
-                        beast::lexicalCastThrow<std::uint32_t>(seqs.back())));
-        }
-    }
-
     if (m->has_ledgerseq() &&
         app_.getLedgerMaster().getValidatedLedgerAge() < 2min)
     {
@@ -1480,9 +1705,6 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMStatusChange> const& m)
                 j[jss::ledger_index_max] =
                     Json::UInt (m->lastseq ());
             }
-
-            if (m->has_shardseqs())
-                j[jss::complete_shards] = m->shardseqs();
 
             return j;
         });
@@ -1600,7 +1822,6 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMHaveTransactionSet> const& m)
 void
 PeerImp::onMessage (std::shared_ptr <protocol::TMValidation> const& m)
 {
-    error_code ec;
     auto const closeTime = app_.timeKeeper().closeTime();
 
     if (m->has_hops() && ! slot_->cluster())
@@ -1729,10 +1950,13 @@ PeerImp::onMessage (std::shared_ptr <protocol::TMGetObjectByHash> const& m)
                 //             need to inject the NodeStore interfaces.
                 std::uint32_t seq {obj.has_ledgerseq() ? obj.ledgerseq() : 0};
                 auto hObj {app_.getNodeStore ().fetch (hash, seq)};
-                if (!hObj && seq >= NodeStore::genesisSeq)
+                if (!hObj)
                 {
                     if (auto shardStore = app_.getShardStore())
-                        hObj = shardStore->fetch(hash, seq);
+                    {
+                        if (seq >= shardStore->earliestSeq())
+                            hObj = shardStore->fetch(hash, seq);
+                    }
                 }
                 if (hObj)
                 {
@@ -1861,7 +2085,7 @@ PeerImp::doFetchPack (const std::shared_ptr<protocol::TMGetObjectByHash>& packet
     memcpy (hash.begin (), packet->ledgerhash ().data (), 32);
 
     std::weak_ptr<PeerImp> weak = shared_from_this();
-    auto elapsed = UptimeTimer::getInstance().getElapsedSeconds();
+    auto elapsed = UptimeClock::now();
     auto const pap = &app_;
     app_.getJobQueue ().addJob (
         jtPACK, "MakeFetchPack",
@@ -2005,7 +2229,9 @@ PeerImp::checkValidation (STValidation::pointer val,
         if (app_.getOPs ().recvValidation(val, std::to_string(id())) ||
             cluster())
         {
-            overlay_.relay(*packet, signingHash);
+            auto const suppression = sha512Half(
+                makeSlice(val->getSerialized()));
+            overlay_.relay(*packet, suppression);
         }
     }
     catch (std::exception const&)
@@ -2043,8 +2269,8 @@ getPeerWithTree (OverlayImpl& ov,
     return ret;
 }
 
-// Returns the set of peers that claim
-// to have the specified ledger.
+// Returns a random peer weighted by how likely to
+// have the ledger and how responsive it is.
 //
 static
 std::shared_ptr<PeerImp>
@@ -2169,40 +2395,40 @@ PeerImp::getLedger (std::shared_ptr<protocol::TMGetLedger> const& m)
             logMe += to_string (ledgerhash);
             ledger = app_.getLedgerMaster ().getLedgerByHash (ledgerhash);
 
+            if (!ledger && packet.has_ledgerseq())
+            {
+                if (auto shardStore = app_.getShardStore())
+                {
+                    auto seq = packet.ledgerseq();
+                    if (seq >= shardStore->earliestSeq())
+                        ledger = shardStore->fetchLedger(ledgerhash, seq);
+                }
+            }
+
             if (!ledger)
             {
                 JLOG(p_journal_.trace()) <<
                     "GetLedger: Don't have " << ledgerhash;
             }
+
             if (!ledger && (packet.has_querytype () &&
                 !packet.has_requestcookie ()))
             {
-                std::uint32_t seq = 0;
-                if (packet.has_ledgerseq())
+                // We don't have the requested ledger
+                // Search for a peer who might
+                auto const v = getPeerWithLedger(overlay_, ledgerhash,
+                    packet.has_ledgerseq() ? packet.ledgerseq() : 0, this);
+                if (!v)
                 {
-                    seq = packet.ledgerseq();
-                    if (seq >= NodeStore::genesisSeq)
-                    {
-                        if (auto shardStore = app_.getShardStore())
-                            ledger = shardStore->fetchLedger(ledgerhash, seq);
-                    }
-                }
-                if (! ledger)
-                {
-                    auto const v = getPeerWithLedger(
-                        overlay_, ledgerhash, seq, this);
-                    if (! v)
-                    {
-                        JLOG(p_journal_.trace()) << "GetLedger: Cannot route";
-                        return;
-                    }
-
-                    packet.set_requestcookie (id ());
-                    v->send (std::make_shared<Message>(
-                        packet, protocol::mtGET_LEDGER));
-                    JLOG(p_journal_.debug()) << "GetLedger: Request routed";
+                    JLOG(p_journal_.trace()) << "GetLedger: Cannot route";
                     return;
                 }
+
+                packet.set_requestcookie (id ());
+                v->send (std::make_shared<Message>(
+                    packet, protocol::mtGET_LEDGER));
+                JLOG(p_journal_.debug()) << "GetLedger: Request routed";
+                return;
             }
         }
         else if (packet.has_ledgerseq ())
@@ -2275,7 +2501,7 @@ PeerImp::getLedger (std::shared_ptr<protocol::TMGetLedger> const& m)
                 nData.getDataPtr (), nData.getLength ());
 
             auto const& stateMap = ledger->stateMap ();
-            if (stateMap.getHash() != zero)
+            if (stateMap.getHash() != beast::zero)
             {
                 // return account state root node if possible
                 Serializer rootNode (768);
@@ -2284,11 +2510,11 @@ PeerImp::getLedger (std::shared_ptr<protocol::TMGetLedger> const& m)
                     reply.add_nodes ()->set_nodedata (
                         rootNode.getDataPtr (), rootNode.getLength ());
 
-                    if (ledger->info().txHash != zero)
+                    if (ledger->info().txHash != beast::zero)
                     {
                         auto const& txMap = ledger->txMap ();
 
-                        if (txMap.getHash() != zero)
+                        if (txMap.getHash() != beast::zero)
                         {
                             rootNode.erase ();
 

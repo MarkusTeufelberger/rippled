@@ -20,7 +20,6 @@
 #ifndef RIPPLE_SHAMAP_TESTS_COMMON_H_INCLUDED
 #define RIPPLE_SHAMAP_TESTS_COMMON_H_INCLUDED
 
-#include <BeastConfig.h>
 #include <ripple/basics/chrono.h>
 #include <ripple/nodestore/DatabaseShard.h>
 #include <ripple/nodestore/DummyScheduler.h>
@@ -44,7 +43,8 @@ private:
 
 public:
     TestFamily (beast::Journal j)
-        : treecache_ ("TreeNodeCache", 65536, 60, clock_, j)
+        : treecache_ ("TreeNodeCache", 65536, std::chrono::minutes{1},
+                      clock_, j)
         , fullbelow_ ("full_below", clock_)
         , parent_ ("TestRootStoppable")
         , j_ (j)

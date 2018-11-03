@@ -41,6 +41,8 @@ namespace ripple {
  */
 struct ValidationParms
 {
+    explicit ValidationParms() = default;
+
     /** The number of seconds a validation remains current after its ledger's
         close time.
 
@@ -589,9 +591,9 @@ public:
                 return ValStatus::badSeq;
 
             // Use insert_or_assign when C++17 supported
-            auto ret = byLedger_[val.ledgerID()].emplace(nodeID, val);
-            if (!ret.second)
-                ret.first->second = val;
+            auto byLedgerIt = byLedger_[val.ledgerID()].emplace(nodeID, val);
+            if (!byLedgerIt.second)
+                byLedgerIt.first->second = val;
 
             auto const ins = current_.emplace(nodeID, val);
             if (!ins.second)
@@ -645,12 +647,12 @@ public:
 
         for (auto& it : current_)
         {
-            if (added.count(it.first))
+            if (added.find(it.first) != added.end())
             {
                 it.second.setTrusted();
                 updateTrie(lock, it.first, it.second, boost::none);
             }
-            else if (removed.count(it.first))
+            else if (removed.find(it.first) != removed.end())
             {
                 it.second.setUntrusted();
                 removeTrie(lock, it.first, it.second);
@@ -661,11 +663,11 @@ public:
         {
             for (auto& nodeVal : it.second)
             {
-                if (added.count(nodeVal.first))
+                if (added.find(nodeVal.first) != added.end())
                 {
                     nodeVal.second.setTrusted();
                 }
-                else if (removed.count(nodeVal.first))
+                else if (removed.find(nodeVal.first) != removed.end())
                 {
                     nodeVal.second.setUntrusted();
                 }
@@ -916,27 +918,6 @@ public:
             });
 
         return res;
-    }
-
-    /** Return the sign times of all trusted full validations
-
-        @param ledgerID The identifier of ledger of interest
-        @return Vector of times
-    */
-    std::vector<NetClock::time_point>
-    getTrustedValidationTimes(ID const& ledgerID)
-    {
-        std::vector<NetClock::time_point> times;
-        ScopedLock lock{mutex_};
-        byLedger(
-            lock,
-            ledgerID,
-            [&](std::size_t numValidations) { times.reserve(numValidations); },
-            [&](NodeID const&, Validation const& v) {
-                if (v.trusted() && v.full())
-                    times.emplace_back(v.signTime());
-            });
-        return times;
     }
 
     /** Returns fees reported by trusted full validators in the given ledger

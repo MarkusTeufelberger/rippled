@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/basics/chrono.h>
 #include <ripple/basics/Log.h>
 #include <ripple/basics/contract.h>
@@ -52,10 +51,6 @@ Logs::Sink::write (beast::severities::Severity level, std::string const& text)
 
 Logs::File::File()
     : m_stream (nullptr)
-{
-}
-
-Logs::File::~File()
 {
 }
 

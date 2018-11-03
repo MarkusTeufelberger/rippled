@@ -27,12 +27,12 @@
 #include <ripple/ledger/ReadView.h>
 #include <ripple/net/InfoSub.h>
 #include <ripple/protocol/STValidation.h>
-#include <boost/asio/io_service.hpp>
+#include <boost/asio.hpp>
 #include <memory>
 #include <deque>
 #include <tuple>
 
-#include "ripple.pb.h"
+#include <ripple/protocol/messages.h>
 
 namespace ripple {
 
@@ -167,8 +167,7 @@ public:
     virtual void setStandAlone () = 0;
     virtual void setStateTimer () = 0;
 
-    // VFALCO TODO rename to setNeedNetworkLedger
-    virtual void needNetworkLedger () = 0;
+    virtual void setNeedNetworkLedger () = 0;
     virtual void clearNeedNetworkLedger () = 0;
     virtual bool isNeedNetworkLedger () = 0;
     virtual bool isFull () = 0;
@@ -177,7 +176,8 @@ public:
     virtual void consensusViewChange () = 0;
 
     virtual Json::Value getConsensusInfo () = 0;
-    virtual Json::Value getServerInfo (bool human, bool admin) = 0;
+    virtual Json::Value getServerInfo (
+        bool human, bool admin, bool counters) = 0;
     virtual void clearLedgerFetch () = 0;
     virtual Json::Value getLedgerFetchInfo () = 0;
 

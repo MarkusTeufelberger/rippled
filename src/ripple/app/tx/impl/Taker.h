@@ -73,11 +73,15 @@ protected:
 
     struct Flow
     {
+        explicit Flow() = default;
+
         Amounts order;
         Amounts issuers;
 
         bool sanity_check () const
         {
+            using beast::zero;
+
             if (isXRP (order.in) && isXRP (order.out))
                 return false;
 
@@ -135,7 +139,8 @@ public:
     BasicTaker (
         CrossType cross_type, AccountID const& account, Amounts const& amount,
         Quality const& quality, std::uint32_t flags, Rate const& rate_in,
-        Rate const& rate_out, beast::Journal journal = beast::Journal ());
+        Rate const& rate_out,
+        beast::Journal journal = beast::Journal{beast::Journal::getNullSink()});
 
     virtual ~BasicTaker () = default;
 
@@ -236,7 +241,7 @@ public:
     consume_offer (Offer& offer, Amounts const& order);
 
     STAmount
-    get_funds (AccountID const& account, STAmount const& funds) const;
+    get_funds (AccountID const& account, STAmount const& funds) const override;
 
     STAmount const&
     get_xrp_flow () const

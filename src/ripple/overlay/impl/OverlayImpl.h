@@ -123,6 +123,13 @@ private:
     std::atomic <uint64_t> peerDisconnects_ {0};
     std::atomic <uint64_t> peerDisconnectsCharges_ {0};
 
+    // Last time we crawled peers for shard info. 'cs' = crawl shards
+    std::atomic<std::chrono::seconds> csLast_{std::chrono::seconds{0}};
+    std::mutex csMutex_;
+    std::condition_variable csCV_;
+    // Peer IDs expecting to receive a last link notification
+    std::set<std::uint32_t> csIDs_;
+
     //--------------------------------------------------------------------------
 
 public:
@@ -221,15 +228,17 @@ public:
     void
     for_each (UnaryFunc&& f)
     {
-        std::lock_guard <decltype(mutex_)> lock (mutex_);
-
-        // Iterate over a copy of the peer list because peer
-        // destruction can invalidate iterators.
         std::vector<std::weak_ptr<PeerImp>> wp;
-        wp.reserve(ids_.size());
+        {
+            std::lock_guard<decltype(mutex_)> lock(mutex_);
 
-        for (auto& x : ids_)
-            wp.push_back(x.second);
+            // Iterate over a copy of the peer list because peer
+            // destruction can invalidate iterators.
+            wp.reserve(ids_.size());
+
+            for (auto& x : ids_)
+                wp.push_back(x.second);
+        }
 
         for (auto& w : wp)
         {
@@ -255,11 +264,11 @@ public:
     template<class Body>
     static
     bool
-    isPeerUpgrade (beast::http::response<Body> const& response)
+    isPeerUpgrade (boost::beast::http::response<Body> const& response)
     {
         if (! is_upgrade(response))
             return false;
-        if(response.result() != beast::http::status::switching_protocols)
+        if(response.result() != boost::beast::http::status::switching_protocols)
             return false;
         auto const versions = parse_ProtocolVersions(
             response["Upgrade"]);
@@ -271,13 +280,13 @@ public:
     template<class Fields>
     static
     bool
-    is_upgrade(beast::http::header<true, Fields> const& req)
+    is_upgrade(boost::beast::http::header<true, Fields> const& req)
     {
-        if(req.version < 11)
+        if(req.version() < 11)
             return false;
-        if(req.method() != beast::http::verb::get)
+        if(req.method() != boost::beast::http::verb::get)
             return false;
-        if(! beast::http::token_list{req["Connection"]}.exists("upgrade"))
+        if(! boost::beast::http::token_list{req["Connection"]}.exists("upgrade"))
             return false;
         return true;
     }
@@ -285,11 +294,11 @@ public:
     template<class Fields>
     static
     bool
-    is_upgrade(beast::http::header<false, Fields> const& req)
+    is_upgrade(boost::beast::http::header<false, Fields> const& req)
     {
-        if(req.version < 11)
+        if(req.version() < 11)
             return false;
-        if(! beast::http::token_list{req["Connection"]}.exists("upgrade"))
+        if(! boost::beast::http::token_list{req["Connection"]}.exists("upgrade"))
             return false;
         return true;
     }
@@ -338,7 +347,18 @@ public:
     getPeerDisconnectCharges() const override
     {
         return peerDisconnectsCharges_;
-    };
+    }
+
+    Json::Value
+    crawlShards(bool pubKey, std::uint32_t hops) override;
+
+
+    /** Called when the last link from a peer chain is received.
+
+        @param id peer id that received the shard info.
+    */
+    void
+    lastLink(std::uint32_t id);
 
 private:
     std::shared_ptr<Writer>

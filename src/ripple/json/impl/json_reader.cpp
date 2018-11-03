@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/basics/contract.h>
 #include <ripple/json/json_reader.h>
 #include <algorithm>
@@ -72,11 +71,6 @@ codePointToUTF8 (unsigned int cp)
 
 // Class Reader
 // //////////////////////////////////////////////////////////////////
-
-Reader::Reader ()
-{
-}
-
 
 bool
 Reader::parse ( std::string const& document,
@@ -392,7 +386,7 @@ Reader::readNumber ()
 
         while ( current_ != end_ )
         {
-            if (!std::isdigit (*current_))
+            if (!std::isdigit (static_cast<unsigned char>(*current_)))
             {
                 auto ret = std::find (std::begin (extended_tokens),
                     std::end (extended_tokens), *current_);

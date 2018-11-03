@@ -75,7 +75,15 @@ class FeatureCollections
         "fix1523",
         "fix1528",
         "DepositAuth",
-        "Checks"
+        "Checks",
+        "fix1571",
+        "fix1543",
+        "fix1623",
+        "DepositPreauth",
+        "fix1515",
+        "fix1578",
+        "MultiSignReserve",
+        "fixTakerDryOfferRemoval"
     };
 
     std::vector<uint256> features;
@@ -135,7 +143,7 @@ public:
     using base::bitset;
     using base::operator==;
     using base::operator!=;
- 
+
     using base::test;
     using base::all;
     using base::any;
@@ -357,6 +365,14 @@ extern uint256 const fix1523;
 extern uint256 const fix1528;
 extern uint256 const featureDepositAuth;
 extern uint256 const featureChecks;
+extern uint256 const fix1571;
+extern uint256 const fix1543;
+extern uint256 const fix1623;
+extern uint256 const featureDepositPreauth;
+extern uint256 const fix1515;
+extern uint256 const fix1578;
+extern uint256 const featureMultiSignReserve;
+extern uint256 const fixTakerDryOfferRemoval;
 
 } // ripple
 

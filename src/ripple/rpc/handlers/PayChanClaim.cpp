@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/app/main/Application.h>
 #include <ripple/basics/StringUtilities.h>
 #include <ripple/ledger/ReadView.h>
@@ -34,33 +33,6 @@
 #include <boost/optional.hpp>
 
 namespace ripple {
-
-static
-boost::optional<std::uint64_t>
-to_uint64(std::string const& s)
-{
-    if (s.empty())
-        return boost::none;
-
-    for (auto c : s)
-    {
-        if (!isdigit(c))
-            return boost::none;
-    }
-
-    try
-    {
-        std::size_t pos{};
-        auto const drops = std::stoul(s, &pos);
-        if (s.size() != pos)
-            return boost::none;
-        return drops;
-    }
-    catch (std::exception const&)
-    {
-        return boost::none;
-    }
-}
 
 // {
 //   secret_key: <signing_secret_key>
@@ -126,7 +98,7 @@ Json::Value doChannelVerify (RPC::Context& context)
     boost::optional<PublicKey> pk;
     {
         std::string const strPk = params[jss::public_key].asString();
-        pk = parseBase58<PublicKey>(TokenType::TOKEN_ACCOUNT_PUBLIC, strPk);
+        pk = parseBase58<PublicKey>(TokenType::AccountPublic, strPk);
 
         if (!pk)
         {

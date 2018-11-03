@@ -34,10 +34,29 @@
 namespace ripple {
 namespace NodeStore {
 
+// Removes a path in its entirety
+inline static
+bool
+removeAll(boost::filesystem::path const& path, beast::Journal& j)
+{
+    try
+    {
+        boost::filesystem::remove_all(path);
+    }
+    catch (std::exception const& e)
+    {
+        JLOG(j.error()) <<
+            "exception: " << e.what();
+        return false;
+    }
+    return true;
+}
+
 using PCache = TaggedCache<uint256, NodeObject>;
 using NCache = KeyCache<uint256>;
+class DatabaseShard;
 
-/* A range of historical ledgers backed by a nodestore.
+/* A range of historical ledgers backed by a node store.
    Shards are indexed and store `ledgersPerShard`.
    Shard `i` stores ledgers starting with sequence: `1 + (i * ledgersPerShard)`
    and ending with sequence: `(i + 1) * ledgersPerShard`.
@@ -46,13 +65,11 @@ using NCache = KeyCache<uint256>;
 class Shard
 {
 public:
-    Shard(std::uint32_t index, int cacheSz,
-        PCache::clock_type::rep cacheAge,
-        beast::Journal& j);
+    Shard(DatabaseShard const& db, std::uint32_t index, int cacheSz,
+        std::chrono::seconds cacheAge, beast::Journal& j);
 
     bool
-    open(Section config, Scheduler& scheduler,
-        boost::filesystem::path dir);
+    open(Section config, Scheduler& scheduler);
 
     bool
     setStored(std::shared_ptr<Ledger const> const& l);
@@ -63,7 +80,7 @@ public:
     bool
     contains(std::uint32_t seq) const;
 
-    void
+    bool
     validate(Application& app);
 
     std::uint32_t
@@ -117,27 +134,32 @@ private:
     // Last ledger sequence in this shard
     std::uint32_t const lastSeq_;
 
+    // The maximum number of ledgers this shard can store
+    // The earliest shard may store less ledgers than
+    // subsequent shards
+    std::uint32_t const maxLedgers_;
+
     // Database positive cache
     std::shared_ptr<PCache> pCache_;
 
     // Database negative cache
     std::shared_ptr<NCache> nCache_;
 
+    // Path to database files
+    boost::filesystem::path const dir_;
+
+    // Path to control file
+    boost::filesystem::path const control_;
+
     std::uint64_t fileSize_ {0};
     std::shared_ptr<Backend> backend_;
     beast::Journal j_;
-
-    // Path to database files
-    boost::filesystem::path dir_;
 
     // True if shard has its entire ledger range stored
     bool complete_ {false};
 
     // Sequences of ledgers stored with an incomplete shard
     RangeSet<std::uint32_t> storedSeqs_;
-
-    // Path to control file
-    boost::filesystem::path control_;
 
     // Used as an optimization for visitDifferences
     std::shared_ptr<Ledger const> lastStored_;

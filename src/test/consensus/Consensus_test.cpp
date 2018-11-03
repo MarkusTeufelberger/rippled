@@ -16,12 +16,12 @@
     OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 */
 //==============================================================================
-#include <BeastConfig.h>
 #include <ripple/beast/clock/manual_clock.h>
 #include <ripple/beast/unit_test.h>
 #include <ripple/consensus/Consensus.h>
 #include <ripple/consensus/ConsensusProposal.h>
 #include <test/csf.h>
+#include <test/unit_test/SuiteJournal.h>
 #include <utility>
 
 namespace ripple {
@@ -29,7 +29,13 @@ namespace test {
 
 class Consensus_test : public beast::unit_test::suite
 {
+    SuiteJournal journal_;
+
 public:
+    Consensus_test ()
+    : journal_ ("Consensus_test", *this)
+    { }
+
     void
     testShouldCloseLedger()
     {
@@ -37,36 +43,35 @@ public:
 
         // Use default parameters
         ConsensusParms const p{};
-        beast::Journal j;
 
         // Bizarre times forcibly close
         BEAST_EXPECT(
-            shouldCloseLedger(true, 10, 10, 10, -10s, 10s, 1s, 1s, p, j));
+            shouldCloseLedger(true, 10, 10, 10, -10s, 10s, 1s, 1s, p, journal_));
         BEAST_EXPECT(
-            shouldCloseLedger(true, 10, 10, 10, 100h, 10s, 1s, 1s, p, j));
+            shouldCloseLedger(true, 10, 10, 10, 100h, 10s, 1s, 1s, p, journal_));
         BEAST_EXPECT(
-            shouldCloseLedger(true, 10, 10, 10, 10s, 100h, 1s, 1s, p, j));
+            shouldCloseLedger(true, 10, 10, 10, 10s, 100h, 1s, 1s, p, journal_));
 
         // Rest of network has closed
         BEAST_EXPECT(
-            shouldCloseLedger(true, 10, 3, 5, 10s, 10s, 10s, 10s, p, j));
+            shouldCloseLedger(true, 10, 3, 5, 10s, 10s, 10s, 10s, p, journal_));
 
         // No transactions means wait until end of internval
         BEAST_EXPECT(
-            !shouldCloseLedger(false, 10, 0, 0, 1s, 1s, 1s, 10s, p, j));
+            !shouldCloseLedger(false, 10, 0, 0, 1s, 1s, 1s, 10s, p, journal_));
         BEAST_EXPECT(
-            shouldCloseLedger(false, 10, 0, 0, 1s, 10s, 1s, 10s, p, j));
+            shouldCloseLedger(false, 10, 0, 0, 1s, 10s, 1s, 10s, p, journal_));
 
         // Enforce minimum ledger open time
         BEAST_EXPECT(
-            !shouldCloseLedger(true, 10, 0, 0, 10s, 10s, 1s, 10s, p, j));
+            !shouldCloseLedger(true, 10, 0, 0, 10s, 10s, 1s, 10s, p, journal_));
 
         // Don't go too much faster than last time
         BEAST_EXPECT(
-            !shouldCloseLedger(true, 10, 0, 0, 10s, 10s, 3s, 10s, p, j));
+            !shouldCloseLedger(true, 10, 0, 0, 10s, 10s, 3s, 10s, p, journal_));
 
         BEAST_EXPECT(
-            shouldCloseLedger(true, 10, 0, 0, 10s, 10s, 10s, 10s, p, j));
+            shouldCloseLedger(true, 10, 0, 0, 10s, 10s, 10s, 10s, p, journal_));
     }
 
     void
@@ -76,39 +81,38 @@ public:
 
         // Use default parameterss
         ConsensusParms const p{};
-        beast::Journal j;
 
         // Not enough time has elapsed
         BEAST_EXPECT(
             ConsensusState::No ==
-            checkConsensus(10, 2, 2, 0, 3s, 2s, p, true, j));
+            checkConsensus(10, 2, 2, 0, 3s, 2s, p, true, journal_));
 
         // If not enough peers have propsed, ensure
         // more time for proposals
         BEAST_EXPECT(
             ConsensusState::No ==
-            checkConsensus(10, 2, 2, 0, 3s, 4s, p, true, j));
+            checkConsensus(10, 2, 2, 0, 3s, 4s, p, true, journal_));
 
         // Enough time has elapsed and we all agree
         BEAST_EXPECT(
             ConsensusState::Yes ==
-            checkConsensus(10, 2, 2, 0, 3s, 10s, p, true, j));
+            checkConsensus(10, 2, 2, 0, 3s, 10s, p, true, journal_));
 
         // Enough time has elapsed and we don't yet agree
         BEAST_EXPECT(
             ConsensusState::No ==
-            checkConsensus(10, 2, 1, 0, 3s, 10s, p, true, j));
+            checkConsensus(10, 2, 1, 0, 3s, 10s, p, true, journal_));
 
         // Our peers have moved on
         // Enough time has elapsed and we all agree
         BEAST_EXPECT(
             ConsensusState::MovedOn ==
-            checkConsensus(10, 2, 1, 8, 3s, 10s, p, true, j));
+            checkConsensus(10, 2, 1, 8, 3s, 10s, p, true, journal_));
 
         // No peers makes it easy to agree
         BEAST_EXPECT(
             ConsensusState::Yes ==
-            checkConsensus(0, 0, 0, 0, 3s, 10s, p, true, j));
+            checkConsensus(0, 0, 0, 0, 3s, 10s, p, true, journal_));
     }
 
     void
@@ -147,7 +151,7 @@ public:
 
         // Connected trust and network graphs with single fixed delay
         peers.trustAndConnect(
-            peers, round<milliseconds>(0.2 * parms.ledgerGRANULARITY));
+            peers, date::round<milliseconds>(0.2 * parms.ledgerGRANULARITY));
 
         // everyone submits their own ID as a TX
         for (Peer * p : peers)
@@ -195,10 +199,11 @@ public:
 
             // Fast and slow network connections
             fast.connect(
-                fast, round<milliseconds>(0.2 * parms.ledgerGRANULARITY));
+                fast, date::round<milliseconds>(0.2 * parms.ledgerGRANULARITY));
 
             slow.connect(
-                network, round<milliseconds>(1.1 * parms.ledgerGRANULARITY));
+                network,
+                date::round<milliseconds>(1.1 * parms.ledgerGRANULARITY));
 
             // All peers submit their own ID as a transaction
             for (Peer* peer : network)
@@ -251,10 +256,12 @@ public:
 
                 // Fast and slow network connections
                 fast.connect(
-                    fast, round<milliseconds>(0.2 * parms.ledgerGRANULARITY));
+                    fast,
+                    date::round<milliseconds>(0.2 * parms.ledgerGRANULARITY));
 
                 slow.connect(
-                    network, round<milliseconds>(1.1 * parms.ledgerGRANULARITY));
+                    network,
+                    date::round<milliseconds>(1.1 * parms.ledgerGRANULARITY));
 
                 for (Peer* peer : slow)
                     peer->runAsValidator = isParticipant;
@@ -378,7 +385,7 @@ public:
 
         network.trust(network);
         network.connect(
-            network, round<milliseconds>(0.2 * parms.ledgerGRANULARITY));
+            network, date::round<milliseconds>(0.2 * parms.ledgerGRANULARITY));
 
         // Run consensus without skew until we have a short close time
         // resolution
@@ -448,7 +455,7 @@ public:
             PeerGroup network = minority + majority;
 
             SimDuration delay =
-                round<milliseconds>(0.2 * parms.ledgerGRANULARITY);
+                date::round<milliseconds>(0.2 * parms.ledgerGRANULARITY);
             minority.trustAndConnect(minority + majorityA, delay);
             majority.trustAndConnect(majority, delay);
 
@@ -553,7 +560,8 @@ public:
 
             PeerGroup network = loner + clique;
             network.connect(
-                network, round<milliseconds>(0.2 * parms.ledgerGRANULARITY));
+                network,
+                date::round<milliseconds>(0.2 * parms.ledgerGRANULARITY));
 
             // initial round to set prior state
             sim.run(1);
@@ -607,9 +615,10 @@ public:
 
             // Fast and slow network connections
             fast.connect(
-                fast, round<milliseconds>(0.2 * parms.ledgerGRANULARITY));
+                fast, date::round<milliseconds>(0.2 * parms.ledgerGRANULARITY));
             slow.connect(
-                network, round<milliseconds>(1.1 * parms.ledgerGRANULARITY));
+                network,
+                date::round<milliseconds>(1.1 * parms.ledgerGRANULARITY));
 
             // Run to the ledger *prior* to decreasing the resolution
             sim.run(increaseLedgerTimeResolutionEvery - 2);
@@ -758,7 +767,7 @@ public:
             PeerGroup network = a + b;
 
             SimDuration delay =
-                round<milliseconds>(0.2 * parms.ledgerGRANULARITY);
+                date::round<milliseconds>(0.2 * parms.ledgerGRANULARITY);
             a.trustAndConnect(a, delay);
             b.trustAndConnect(b, delay);
 
@@ -805,7 +814,7 @@ public:
         center.trust(validators);
 
         SimDuration delay =
-                round<milliseconds>(0.2 * parms.ledgerGRANULARITY);
+                date::round<milliseconds>(0.2 * parms.ledgerGRANULARITY);
         validators.connect(center, delay);
 
         center[0]->runAsValidator = false;
@@ -929,8 +938,10 @@ public:
         PeerGroup groupNotFastC = groupABD + groupCsplit;
         PeerGroup network = groupABD + groupCsplit + groupCfast;
 
-        SimDuration delay = round<milliseconds>(0.2 * parms.ledgerGRANULARITY);
-        SimDuration fDelay = round<milliseconds>(0.1 * parms.ledgerGRANULARITY);
+        SimDuration delay = date::round<milliseconds>(
+            0.2 * parms.ledgerGRANULARITY);
+        SimDuration fDelay = date::round<milliseconds>(
+            0.1 * parms.ledgerGRANULARITY);
 
         network.trust(network);
         // C must have a shorter delay to see all the validations before the

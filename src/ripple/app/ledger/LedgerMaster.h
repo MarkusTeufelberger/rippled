@@ -27,6 +27,7 @@
 #include <ripple/app/ledger/LedgerCleaner.h>
 #include <ripple/app/ledger/LedgerHistory.h>
 #include <ripple/app/ledger/LedgerHolder.h>
+#include <ripple/app/ledger/LedgerReplay.h>
 #include <ripple/app/misc/CanonicalTXSet.h>
 #include <ripple/basics/chrono.h>
 #include <ripple/basics/RangeSet.h>
@@ -40,20 +41,14 @@
 #include <ripple/beast/utility/PropertyStream.h>
 #include <mutex>
 
-#include "ripple.pb.h"
+#include <ripple/protocol/messages.h>
 
 namespace ripple {
 
 class Peer;
 class Transaction;
 
-struct LedgerReplay
-{
-    std::map< int, std::shared_ptr<STTx const> > txns_;
-    NetClock::time_point closeTime_;
-    int closeFlags_;
-    std::shared_ptr<Ledger const> prevLedger_;
-};
+
 
 // Tracks the current ledger and any ledgers in the process of closing
 // Tracks ledger history
@@ -193,13 +188,17 @@ public:
     bool getFullValidatedRange (
         std::uint32_t& minVal, std::uint32_t& maxVal);
 
-    void tune (int size, int age);
+    void tune (int size, std::chrono::seconds age);
     void sweep ();
     float getCacheHitRate ();
 
     void checkAccept (std::shared_ptr<Ledger const> const& ledger);
     void checkAccept (uint256 const& hash, std::uint32_t seq);
-    void consensusBuilt (std::shared_ptr<Ledger const> const& ledger, Json::Value consensus);
+    void
+    consensusBuilt(
+        std::shared_ptr<Ledger const> const& ledger,
+        uint256 const& consensusHash,
+        Json::Value consensus);
 
     LedgerIndex getBuildingLedger ();
     void setBuildingLedger (LedgerIndex index);
@@ -239,7 +238,7 @@ public:
         std::weak_ptr<Peer> const& wPeer,
         std::shared_ptr<protocol::TMGetObjectByHash> const& request,
         uint256 haveLedgerHash,
-        std::uint32_t uUptime);
+        UptimeClock::time_point uptime);
 
     std::size_t getFetchPackCacheSize () const;
 
@@ -257,7 +256,7 @@ private:
         std::shared_ptr<Ledger const> ledger);
 
     void getFetchPack(
-        LedgerIndex missingIndex, InboundLedger::Reason reason);
+        LedgerIndex missing, InboundLedger::Reason reason);
 
     boost::optional<LedgerHash> getLedgerHashForHistory(
         LedgerIndex index, InboundLedger::Reason reason);
@@ -337,6 +336,8 @@ private:
 
     int     mPathFindThread {0};    // Pathfinder jobs dispatched
     bool    mPathFindNewRequest {false};
+
+    std::atomic_flag mGotFetchPackThread = ATOMIC_FLAG_INIT; // GotFetchPack jobs dispatched
 
     std::atomic <std::uint32_t> mPubLedgerClose {0};
     std::atomic <LedgerIndex> mPubLedgerSeq {0};

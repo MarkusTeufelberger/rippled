@@ -43,7 +43,20 @@ public:
     init() override;
 
     boost::optional<std::uint32_t>
-    prepare(std::uint32_t validLedgerSeq) override;
+    prepareLedger(std::uint32_t validLedgerSeq) override;
+
+    bool
+    prepareShard(std::uint32_t shardIndex) override;
+
+    void
+    removePreShard(std::uint32_t shardIndex) override;
+
+    std::uint32_t
+    getNumPreShard() override;
+
+    bool
+    importShard(std::uint32_t shardIndex,
+        boost::filesystem::path const& srcDir, bool validate) override;
 
     std::shared_ptr<Ledger>
     fetchLedger(uint256 const& hash, std::uint32_t seq) override;
@@ -60,17 +73,59 @@ public:
     void
     validate() override;
 
+    std::uint32_t
+    ledgersPerShard() const override
+    {
+        return ledgersPerShard_;
+    }
+
+    std::uint32_t
+    earliestShardIndex() const override
+    {
+        return earliestShardIndex_;
+    }
+
+    std::uint32_t
+    seqToShardIndex(std::uint32_t seq) const override
+    {
+        assert(seq >= earliestSeq());
+        return (seq - 1) / ledgersPerShard_;
+    }
+
+    std::uint32_t
+    firstLedgerSeq(std::uint32_t shardIndex) const override
+    {
+        assert(shardIndex >= earliestShardIndex_);
+        if (shardIndex <= earliestShardIndex_)
+            return earliestSeq();
+        return 1 + (shardIndex * ledgersPerShard_);
+    }
+
+    std::uint32_t
+    lastLedgerSeq(std::uint32_t shardIndex) const override
+    {
+        assert(shardIndex >= earliestShardIndex_);
+        return (shardIndex + 1) * ledgersPerShard_;
+    }
+
+    boost::filesystem::path const&
+    getRootDir() const override
+    {
+        return dir_;
+    }
+
     std::string
     getName() const override
     {
-        return "shardstore";
+        return backendName_;
     }
 
+    /** Import the application local node store
+
+        @param source The application node store.
+    */
     void
-    import(Database& source) override
-    {
-        Throw<std::runtime_error>("Shard store import not supported");
-    }
+    import(Database& source) override;
 
     std::int32_t
     getWriteLoad() const override;
@@ -96,7 +151,7 @@ public:
     getCacheHitRate() override;
 
     void
-    tune(int size, int age) override;
+    tune(int size, std::chrono::seconds age) override;
 
     void
     sweep() override;
@@ -105,10 +160,18 @@ private:
     Application& app_;
     mutable std::mutex m_;
     bool init_ {false};
+
+    // Complete shards
     std::map<std::uint32_t, std::unique_ptr<Shard>> complete_;
+
+    // A shard being acquired from the peer network
     std::unique_ptr<Shard> incomplete_;
+
+    // Shards prepared for import
+    std::map<std::uint32_t, Shard*> preShards_;
+
     Section const config_;
-    boost::filesystem::path dir_;
+    boost::filesystem::path const dir_;
 
     // If new shards can be stored
     bool canAdd_ {true};
@@ -119,18 +182,32 @@ private:
     // If backend type uses permanent storage
     bool backed_;
 
+    // The name associated with the backend used with the shard store
+    std::string const backendName_;
+
     // Maximum disk space the DB can use (in bytes)
     std::uint64_t const maxDiskSpace_;
 
     // Disk space used to store the shards (in bytes)
     std::uint64_t usedDiskSpace_ {0};
 
+    // Each shard stores 16384 ledgers. The earliest shard may store
+    // less if the earliest ledger sequence truncates its beginning.
+    // The value should only be altered for unit tests.
+    std::uint32_t const ledgersPerShard_;
+
+    // The earliest shard index
+    std::uint32_t const earliestShardIndex_;
+
     // Average disk space a shard requires (in bytes)
     std::uint64_t avgShardSz_;
 
     // Shard cache tuning
     int cacheSz_ {shardCacheSz};
-    PCache::clock_type::rep cacheAge_ {shardCacheSeconds};
+    std::chrono::seconds cacheAge_ {shardCacheAge};
+
+    // File name used to mark shards being imported from node store
+    static constexpr auto importMarker_ = "import";
 
     std::shared_ptr<NodeObject>
     fetchFrom(uint256 const& hash, std::uint32_t seq) override;
@@ -163,6 +240,10 @@ private:
         return std::max(shardCacheSz, cacheSz_ / std::max(
             1, static_cast<int>(complete_.size() + (incomplete_ ? 1 : 0))));
     }
+
+    // Returns available storage space
+    std::uint64_t
+    available() const;
 };
 
 } // NodeStore

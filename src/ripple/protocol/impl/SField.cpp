@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/protocol/SField.h>
 #include <cassert>
 #include <map>
@@ -46,6 +45,8 @@ using StaticScopedLockType = std::lock_guard <std::mutex>;
 // Give this translation unit only, permission to construct SFields
 struct SField::make
 {
+    explicit make() = default;
+
     template <class ...Args>
     static SField one(SField const* p, Args&& ...args)
     {
@@ -141,6 +142,8 @@ SF_U64 const sfExchangeRate     = make::one<SF_U64::type>(&sfExchangeRate,     S
 SF_U64 const sfLowNode          = make::one<SF_U64::type>(&sfLowNode,          STI_UINT64, 7, "LowNode");
 SF_U64 const sfHighNode         = make::one<SF_U64::type>(&sfHighNode,         STI_UINT64, 8, "HighNode");
 SF_U64 const sfDestinationNode  = make::one<SF_U64::type>(&sfDestinationNode,  STI_UINT64, 9, "DestinationNode");
+SF_U64 const sfCookie           = make::one<SF_U64::type>(&sfCookie,           STI_UINT64, 10,"Cookie");
+
 
 // 128-bit
 SF_U128 const sfEmailHash = make::one<SF_U128::type>(&sfEmailHash, STI_HASH128, 1, "EmailHash");
@@ -217,6 +220,8 @@ SF_Account const sfAccount     = make::one<SF_Account::type>(&sfAccount,     STI
 SF_Account const sfOwner       = make::one<SF_Account::type>(&sfOwner,       STI_ACCOUNT, 2, "Owner");
 SF_Account const sfDestination = make::one<SF_Account::type>(&sfDestination, STI_ACCOUNT, 3, "Destination");
 SF_Account const sfIssuer      = make::one<SF_Account::type>(&sfIssuer,      STI_ACCOUNT, 4, "Issuer");
+SF_Account const sfAuthorize   = make::one<SF_Account::type>(&sfAuthorize,   STI_ACCOUNT, 5, "Authorize");
+SF_Account const sfUnauthorize = make::one<SF_Account::type>(&sfUnauthorize, STI_ACCOUNT, 6, "Unauthorize");
 SF_Account const sfTarget      = make::one<SF_Account::type>(&sfTarget,      STI_ACCOUNT, 7, "Target");
 SF_Account const sfRegularKey  = make::one<SF_Account::type>(&sfRegularKey,  STI_ACCOUNT, 8, "RegularKey");
 

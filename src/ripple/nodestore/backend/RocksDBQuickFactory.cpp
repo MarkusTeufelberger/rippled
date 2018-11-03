@@ -17,13 +17,13 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 
 #include <ripple/unity/rocksdb.h>
 
 #if RIPPLE_ROCKSDB_AVAILABLE
 
 #include <ripple/basics/contract.h>
+#include <ripple/basics/ByteUtilities.h>
 #include <ripple/core/Config.h> // VFALCO Bad dependency
 #include <ripple/nodestore/Factory.h>
 #include <ripple/nodestore/Manager.h>
@@ -75,7 +75,7 @@ public:
     }
 
     void
-    StartThread (void (*f)(void*), void* a)
+    StartThread (void (*f)(void*), void* a) override
     {
         ThreadParams* const p (new ThreadParams (f, a));
         EnvWrapper::StartThread (&RocksDBQuickEnv::thread_entry, p);
@@ -110,7 +110,7 @@ public:
                 "Missing path in RocksDBQuickFactory backend");
 
         // Defaults
-        std::uint64_t budget = 512 * 1024 * 1024;  // 512MB
+        std::uint64_t budget = megabytes(512);
         std::string style("level");
         std::uint64_t threads=4;
 
@@ -129,7 +129,7 @@ public:
             m_options.OptimizeUniversalStyleCompaction(budget);
 
         if (style == "point")
-            m_options.OptimizeForPointLookup(budget / 1024 / 1024);  // In MB
+            m_options.OptimizeForPointLookup(budget / megabytes(1)); // In MB
 
         m_options.IncreaseParallelism(threads);
 
@@ -168,7 +168,7 @@ public:
             m_options.compression = rocksdb::kNoCompression;
     }
 
-    ~RocksDBQuickBackend ()
+    ~RocksDBQuickBackend () override
     {
         close();
     }
@@ -180,7 +180,7 @@ public:
     }
 
     void
-    open() override
+    open(bool createIfMissing) override
     {
         if (m_db)
         {
@@ -397,13 +397,13 @@ public:
         Manager::instance().insert(*this);
     }
 
-    ~RocksDBQuickFactory()
+    ~RocksDBQuickFactory() override
     {
         Manager::instance().erase(*this);
     }
 
     std::string
-    getName () const
+    getName () const override
     {
         return "RocksDBQuick";
     }
@@ -413,7 +413,7 @@ public:
         size_t keyBytes,
         Section const& keyValues,
         Scheduler& scheduler,
-        beast::Journal journal)
+        beast::Journal journal) override
     {
         return std::make_unique <RocksDBQuickBackend> (
             keyBytes, keyValues, scheduler, journal, &m_env);

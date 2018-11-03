@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/basics/strHex.h>
 #include <ripple/crypto/KeyType.h>
 #include <ripple/net/RPCErr.h>
@@ -109,16 +108,16 @@ Json::Value walletPropose (Json::Value const& params)
     Json::Value obj (Json::objectValue);
 
     auto const seed1751 = seedAs1751 (*seed);
-    auto const seedHex = strHex (seed->data(), seed->size());
+    auto const seedHex = strHex (*seed);
     auto const seedBase58 = toBase58 (*seed);
 
     obj[jss::master_seed] = seedBase58;
     obj[jss::master_seed_hex] = seedHex;
     obj[jss::master_key] = seed1751;
     obj[jss::account_id] = toBase58(calcAccountID(publicKey));
-    obj[jss::public_key] = toBase58(TOKEN_ACCOUNT_PUBLIC, publicKey);
+    obj[jss::public_key] = toBase58(TokenType::AccountPublic, publicKey);
     obj[jss::key_type] = to_string (keyType);
-    obj[jss::public_key_hex] = strHex (publicKey.data(), publicKey.size());
+    obj[jss::public_key_hex] = strHex (publicKey);
 
     // If a passphrase was specified, and it was hashed and used as a seed
     // run a quick entropy check and add an appropriate warning, because

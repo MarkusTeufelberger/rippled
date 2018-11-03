@@ -59,13 +59,13 @@ class TxQ_test : public beast::unit_test::suite
         BEAST_EXPECT(metrics.txQMaxSize == expectedMaxCount);
         BEAST_EXPECT(metrics.txInLedger == expectedInLedger);
         BEAST_EXPECT(metrics.txPerLedger == expectedPerLedger);
-        BEAST_EXPECT(metrics.minFeeLevel == expectedMinFeeLevel);
+        BEAST_EXPECT(metrics.minProcessingFeeLevel == expectedMinFeeLevel);
         BEAST_EXPECT(metrics.medFeeLevel == expectedMedFeeLevel);
         auto expectedCurFeeLevel = expectedInLedger > expectedPerLedger ?
             expectedMedFeeLevel * expectedInLedger * expectedInLedger /
                 (expectedPerLedger * expectedPerLedger) :
                     metrics.referenceFeeLevel;
-        BEAST_EXPECT(metrics.expFeeLevel == expectedCurFeeLevel);
+        BEAST_EXPECT(metrics.openLedgerFeeLevel == expectedCurFeeLevel);
     }
 
     void
@@ -91,7 +91,7 @@ class TxQ_test : public beast::unit_test::suite
             return fee(none);
 
         // Don't care about the overflow flag
-        return fee(mulDiv(metrics->expFeeLevel,
+        return fee(mulDiv(metrics->openLedgerFeeLevel,
             view.fees().base, metrics->referenceFeeLevel).second + 1);
     }
 
@@ -108,6 +108,7 @@ class TxQ_test : public beast::unit_test::suite
         section.set("max_ledger_counts_to_store", "100");
         section.set("retry_sequence_percent", "25");
         section.set("zero_basefee_transaction_feelevel", "100000000000");
+        section.set("normal_consensus_increase_percent", "0");
 
         for (auto const& value : extraTxQ)
             section.set(value.first, value.second);
@@ -145,6 +146,7 @@ class TxQ_test : public beast::unit_test::suite
 
         // Close the ledger with a delay to force the TxQ stats
         // to stay at the default.
+        using namespace std::chrono_literals;
         env.close(env.now() + 5s, 10000ms);
         checkMetrics(env, 0,
             2 * (ripple::detail::supportedAmendments().size() + 1),
@@ -342,6 +344,41 @@ public:
             metrics->txQMaxSize, metrics->txPerLedger + 1,
             metrics->txPerLedger,
             256);
+    }
+
+    void testTecResult()
+    {
+        using namespace jtx;
+
+        Env env(*this,
+            makeConfig({ { "minimum_txn_in_ledger_standalone", "2" } }));
+
+        auto alice = Account("alice");
+        auto gw = Account("gw");
+        auto USD = gw["USD"];
+
+        checkMetrics(env, 0, boost::none, 0, 2, 256);
+
+        // Create accounts
+        env.fund(XRP(50000), noripple(alice, gw));
+        checkMetrics(env, 0, boost::none, 2, 2, 256);
+        env.close();
+        checkMetrics(env, 0, 4, 0, 2, 256);
+
+        // Alice creates an unfunded offer while the ledger is not full
+        env(offer(alice, XRP(1000), USD(1000)), ter(tecUNFUNDED_OFFER));
+        checkMetrics(env, 0, 4, 1, 2, 256);
+
+        fillQueue(env, alice);
+        checkMetrics(env, 0, 4, 3, 2, 256);
+
+        // Alice creates an unfunded offer that goes in the queue
+        env(offer(alice, XRP(1000), USD(1000)), ter(terQUEUED));
+        checkMetrics(env, 1, 4, 3, 2, 256);
+
+        // The offer comes out of the queue
+        env.close();
+        checkMetrics(env, 0, 6, 1, 3, 256);
     }
 
     void testLocalTxRetry()
@@ -1627,7 +1664,7 @@ public:
             auto fee = env.rpc("fee");
 
             if (BEAST_EXPECT(fee.isMember(jss::result) &&
-                !RPC::contains_error(fee[jss::result])))
+                BEAST_EXPECT(!RPC::contains_error(fee[jss::result]))))
             {
                 auto const& result = fee[jss::result];
                 BEAST_EXPECT(result.isMember(jss::ledger_current_index)
@@ -1655,7 +1692,7 @@ public:
             fee = env.rpc("fee");
 
             if (BEAST_EXPECT(fee.isMember(jss::result) &&
-                !RPC::contains_error(fee[jss::result])))
+                BEAST_EXPECT(!RPC::contains_error(fee[jss::result]))))
             {
                 auto const& result = fee[jss::result];
                 BEAST_EXPECT(result.isMember(jss::ledger_current_index)
@@ -2428,6 +2465,7 @@ public:
         checkMetrics(env, 0, boost::none, 4, 3, 256);
 
         // First transaction establishes the messaging
+        using namespace std::chrono_literals;
         BEAST_EXPECT(wsc->findMsg(5s,
             [&](auto const& jv)
         {
@@ -2774,7 +2812,142 @@ public:
         }
     }
 
-    void run()
+    void
+    testScaling()
+    {
+        using namespace jtx;
+        using namespace std::chrono_literals;
+
+        {
+            Env env(*this,
+                makeConfig({ { "minimum_txn_in_ledger_standalone", "3" },
+                    { "normal_consensus_increase_percent", "25" },
+                    { "slow_consensus_decrease_percent", "50" },
+                    { "target_txn_in_ledger", "10" },
+                    { "maximum_txn_per_account", "200" } }));
+            auto alice = Account("alice");
+
+            checkMetrics(env, 0, boost::none, 0, 3, 256);
+            env.fund(XRP(50000000), alice);
+
+            fillQueue(env, alice);
+            checkMetrics(env, 0, boost::none, 4, 3, 256);
+            auto seqAlice = env.seq(alice);
+            auto txCount = 140;
+            for (int i = 0; i < txCount; ++i)
+                env(noop(alice), seq(seqAlice++), ter(terQUEUED));
+            checkMetrics(env, txCount, boost::none, 4, 3, 256);
+
+            // Close a few ledgers successfully, so the limit grows
+
+            env.close();
+            // 4 + 25% = 5
+            txCount -= 6;
+            checkMetrics(env, txCount, 10, 6, 5, 257);
+
+            env.close();
+            // 6 + 25% = 7
+            txCount -= 8;
+            checkMetrics(env, txCount, 14, 8, 7, 257);
+
+            env.close();
+            // 8 + 25% = 10
+            txCount -= 11;
+            checkMetrics(env, txCount, 20, 11, 10, 257);
+
+            env.close();
+            // 11 + 25% = 13
+            txCount -= 14;
+            checkMetrics(env, txCount, 26, 14, 13, 257);
+
+            env.close();
+            // 14 + 25% = 17
+            txCount -= 18;
+            checkMetrics(env, txCount, 34, 18, 17, 257);
+
+            env.close();
+            // 18 + 25% = 22
+            txCount -= 23;
+            checkMetrics(env, txCount, 44, 23, 22, 257);
+
+            env.close();
+            // 23 + 25% = 28
+            txCount -= 29;
+            checkMetrics(env, txCount, 56, 29, 28, 256);
+
+            // From 3 expected to 28 in 7 "fast" ledgers.
+
+            // Close the ledger with a delay.
+            env.close(env.now() + 5s, 10000ms);
+            txCount -= 15;
+            checkMetrics(env, txCount, 56, 15, 14, 256);
+
+            // Close the ledger with a delay.
+            env.close(env.now() + 5s, 10000ms);
+            txCount -= 8;
+            checkMetrics(env, txCount, 56, 8, 7, 256);
+
+            // Close the ledger with a delay.
+            env.close(env.now() + 5s, 10000ms);
+            txCount -= 4;
+            checkMetrics(env, txCount, 56, 4, 3, 256);
+
+            // From 28 expected back down to 3 in 3 "slow" ledgers.
+
+            // Confirm the minimum sticks
+            env.close(env.now() + 5s, 10000ms);
+            txCount -= 4;
+            checkMetrics(env, txCount, 56, 4, 3, 256);
+
+            BEAST_EXPECT(!txCount);
+        }
+
+        {
+            Env env(*this,
+                makeConfig({ { "minimum_txn_in_ledger_standalone", "3" },
+                    { "normal_consensus_increase_percent", "150" },
+                    { "slow_consensus_decrease_percent", "150" },
+                    { "target_txn_in_ledger", "10" },
+                    { "maximum_txn_per_account", "200" } }));
+            auto alice = Account("alice");
+
+            checkMetrics(env, 0, boost::none, 0, 3, 256);
+            env.fund(XRP(50000000), alice);
+
+            fillQueue(env, alice);
+            checkMetrics(env, 0, boost::none, 4, 3, 256);
+            auto seqAlice = env.seq(alice);
+            auto txCount = 43;
+            for (int i = 0; i < txCount; ++i)
+                env(noop(alice), seq(seqAlice++), ter(terQUEUED));
+            checkMetrics(env, txCount, boost::none, 4, 3, 256);
+
+            // Close a few ledgers successfully, so the limit grows
+
+            env.close();
+            // 4 + 150% = 10
+            txCount -= 11;
+            checkMetrics(env, txCount, 20, 11, 10, 257);
+
+            env.close();
+            // 11 + 150% = 27
+            txCount -= 28;
+            checkMetrics(env, txCount, 54, 28, 27, 256);
+
+            // From 3 expected to 28 in 7 "fast" ledgers.
+
+            // Close the ledger with a delay.
+            env.close(env.now() + 5s, 10000ms);
+            txCount -= 4;
+            checkMetrics(env, txCount, 54, 4, 3, 256);
+
+            // From 28 expected back down to 3 in 3 "slow" ledgers.
+
+            BEAST_EXPECT(!txCount);
+        }
+    }
+    
+    void run() override
     {
         testQueue();
         testLocalTxRetry();
@@ -2798,10 +2971,11 @@ public:
         testServerInfo();
         testServerSubscribe();
         testClearQueuedAccountTxs();
+        testScaling();
     }
 };
 
-BEAST_DEFINE_TESTSUITE(TxQ,app,ripple);
+BEAST_DEFINE_TESTSUITE_PRIO(TxQ,app,ripple,1);
 
 }
 }

@@ -29,7 +29,9 @@
 #include <test/app/Flow_test.cpp>
 #include <test/app/Freeze_test.cpp>
 #include <test/app/HashRouter_test.cpp>
+#include <test/app/LedgerHistory_test.cpp>
 #include <test/app/LedgerLoad_test.cpp>
+#include <test/app/LedgerReplay_test.cpp>
 #include <test/app/LoadFeeTrack_test.cpp>
 #include <test/app/Manifest_test.cpp>
 #include <test/app/MultiSign_test.cpp>

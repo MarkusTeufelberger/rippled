@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <ripple/app/consensus/RCLValidations.h>
 #include <ripple/app/ledger/InboundLedger.h>
 #include <ripple/app/ledger/InboundLedgers.h>
@@ -39,7 +38,7 @@
 namespace ripple {
 
 RCLValidatedLedger::RCLValidatedLedger(MakeGenesis)
-    : ledgerID_{0}, ledgerSeq_{0}
+    : ledgerID_{0}, ledgerSeq_{0}, j_{beast::Journal::getNullSink()}
 {
 }
 
@@ -251,7 +250,7 @@ RCLValidationsAdaptor::doStaleWrite(ScopedLockType&)
                     auto const initialSeq = ledgerSeq.value_or(
                         app_.getLedgerMaster().getCurrentLedgerIndex());
                     auto const nodePubKey = toBase58(
-                        TokenType::TOKEN_NODE_PUBLIC, val->getSignerPublic());
+                        TokenType::NodePublic, val->getSignerPublic());
                     auto const signTime =
                         val->getSignTime().time_since_epoch().count();
 
@@ -300,10 +299,10 @@ handleNewValidation(Application& app,
         s << "Val for " << hash
           << (val->isTrusted() ? " trusted/" : " UNtrusted/")
           << (val->isFull() ? "full" : "partial") << " from "
-          << (masterKey ? toBase58(TokenType::TOKEN_NODE_PUBLIC, *masterKey)
+          << (masterKey ? toBase58(TokenType::NodePublic, *masterKey)
                         : "unknown")
           << " signing key "
-          << toBase58(TokenType::TOKEN_NODE_PUBLIC, signingKey) << " " << msg
+          << toBase58(TokenType::NodePublic, signingKey) << " " << msg
           << " src=" << source;
     };
 
@@ -321,7 +320,7 @@ handleNewValidation(Application& app,
         if(j.debug())
             dmp(j.debug(), to_string(outcome));
 
-        if(outcome == ValStatus::badSeq && j.warn())
+        if (outcome == ValStatus::badSeq && j.warn())
         {
             auto const seq = val->getFieldU32(sfLedgerSequence);
             dmp(j.warn(),
@@ -334,12 +333,11 @@ handleNewValidation(Application& app,
                 hash, val->getFieldU32(sfLedgerSequence));
             shouldRelay = true;
         }
-
     }
     else
     {
         JLOG(j.debug()) << "Val for " << hash << " from "
-                    << toBase58(TokenType::TOKEN_NODE_PUBLIC, signingKey)
+                    << toBase58(TokenType::NodePublic, signingKey)
                     << " not added UNlisted";
     }
 

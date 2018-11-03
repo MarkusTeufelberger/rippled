@@ -29,9 +29,8 @@
 #include <ripple/protocol/PublicKey.h>
 #include <boost/iterator/counting_iterator.hpp>
 #include <boost/range/adaptors.hpp>
-#include <boost/thread/locks.hpp>
-#include <boost/thread/shared_mutex.hpp>
 #include <mutex>
+#include <shared_mutex>
 #include <numeric>
 
 namespace ripple {
@@ -64,6 +63,8 @@ to_string(ListDisposition disposition);
 */
 struct TrustChanges
 {
+    explicit TrustChanges() = default;
+
     hash_set<NodeID> added;
     hash_set<NodeID> removed;
 };
@@ -115,6 +116,8 @@ class ValidatorList
 {
     struct PublisherList
     {
+        explicit PublisherList() = default;
+
         bool available;
         std::vector<PublicKey> list;
         std::size_t sequence;
@@ -125,7 +128,7 @@ class ValidatorList
     ManifestCache& publisherManifests_;
     TimeKeeper& timeKeeper_;
     beast::Journal j_;
-    boost::shared_mutex mutable mutex_;
+    std::shared_timed_mutex mutable mutex_;
 
     std::atomic<std::size_t> quorum_;
     boost::optional<std::size_t> minimumQuorum_;
@@ -144,17 +147,6 @@ class ValidatorList
     // Currently supported version of publisher list format
     static constexpr std::uint32_t requiredListVersion = 1;
 
-    // The minimum number of listed validators required to allow removing
-    // non-communicative validators from the trusted set. In other words, if the
-    // number of listed validators is less, then use all of them in the
-    // trusted set.
-    std::size_t const MINIMUM_RESIZEABLE_UNL {25};
-    // The maximum size of a trusted set for which greater than Byzantine fault
-    // tolerance isn't needed.
-    std::size_t const BYZANTINE_THRESHOLD {32};
-
-
-
 public:
     ValidatorList (
         ManifestCache& validatorManifests,
@@ -162,7 +154,7 @@ public:
         TimeKeeper& timeKeeper,
         beast::Journal j,
         boost::optional<std::size_t> minimumQuorum = boost::none);
-    ~ValidatorList ();
+    ~ValidatorList () = default;
 
     /** Load configured trusted keys.
 
@@ -245,7 +237,7 @@ public:
     quorum () const
     {
         return quorum_;
-    };
+    }
 
     /** Returns `true` if public key is trusted
 
@@ -339,6 +331,10 @@ public:
     for_each_listed (
         std::function<void(PublicKey const&, bool)> func) const;
 
+    /** Return the number of configured validator list sites. */
+    std::size_t
+    count() const;
+
     /** Return the time when the validator list will expire
 
         @note This may be a time in the past if a published list has not
@@ -389,15 +385,15 @@ private:
     bool
     removePublisherList (PublicKey const& publisherKey);
 
-    /** Return safe minimum quorum for listed validator set
+    /** Return quorum for trusted validator set
 
-        @param nListedKeys Number of list validator keys
+        @param trusted Number of trusted validator keys
 
-        @param unListedLocal Whether the local node is an unlisted validator
-    */
-    static std::size_t
-    calculateMinimumQuorum (
-        std::size_t nListedKeys, bool unlistedLocal=false);
+        @param seen Number of trusted validators that have signed
+        recently received validations */
+    std::size_t
+    calculateQuorum (
+        std::size_t trusted, std::size_t seen);
 };
 } // ripple
 

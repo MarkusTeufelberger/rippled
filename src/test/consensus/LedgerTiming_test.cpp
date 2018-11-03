@@ -16,7 +16,6 @@
     OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 */
 //==============================================================================
-#include <BeastConfig.h>
 #include <ripple/beast/unit_test.h>
 #include <ripple/consensus/LedgerTiming.h>
 
@@ -25,8 +24,6 @@ namespace test {
 
 class LedgerTiming_test : public beast::unit_test::suite
 {
-    beast::Journal j;
-
     void testGetNextLedgerTimeResolution()
     {
         // helper to iteratively call into getNextLedgerTimeResolution

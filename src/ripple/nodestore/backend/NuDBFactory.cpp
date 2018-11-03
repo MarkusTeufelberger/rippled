@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 
 #include <ripple/basics/contract.h>
 #include <ripple/nodestore/Factory.h>
@@ -41,14 +40,10 @@ class NuDBBackend
     : public Backend
 {
 public:
-    enum
-    {
-        // This needs to be tuned for the
-        // distribution of data sizes.
-        arena_alloc_size = 16 * 1024 * 1024,
-
-        currentType = 1
-    };
+    // This needs to be tuned for the
+    // distribution of data sizes.
+    static constexpr std::size_t arena_alloc_size = megabytes(16);
+    static constexpr std::size_t currentType = 1;
 
     beast::Journal j_;
     size_t const keyBytes_;
@@ -70,7 +65,7 @@ public:
                 "nodestore: Missing path in NuDB backend");
     }
 
-    ~NuDBBackend ()
+    ~NuDBBackend () override
     {
         close();
     }
@@ -82,8 +77,9 @@ public:
     }
 
     void
-    open() override
+    open(bool createIfMissing) override
     {
+        using namespace boost::filesystem;
         if (db_.is_open())
         {
             assert(false);
@@ -91,19 +87,22 @@ public:
                 "database is already open";
             return;
         }
-        auto const folder = boost::filesystem::path(name_);
-        boost::filesystem::create_directories (folder);
+        auto const folder = path(name_);
         auto const dp = (folder / "nudb.dat").string();
         auto const kp = (folder / "nudb.key").string();
         auto const lp = (folder / "nudb.log").string();
         nudb::error_code ec;
-        nudb::create<nudb::xxhasher>(dp, kp, lp,
-            currentType, nudb::make_salt(), keyBytes_,
-                nudb::block_size(kp), 0.50, ec);
-        if(ec == nudb::errc::file_exists)
-            ec = {};
-        if(ec)
-            Throw<nudb::system_error>(ec);
+        if (createIfMissing)
+        {
+            create_directories(folder);
+            nudb::create<nudb::xxhasher>(dp, kp, lp,
+                currentType, nudb::make_salt(), keyBytes_,
+                    nudb::block_size(kp), 0.50, ec);
+            if(ec == nudb::errc::file_exists)
+                ec = {};
+            if(ec)
+                Throw<nudb::system_error>(ec);
+        }
         db_.open (dp, kp, lp, ec);
         if(ec)
             Throw<nudb::system_error>(ec);
@@ -297,13 +296,13 @@ public:
         Manager::instance().insert(*this);
     }
 
-    ~NuDBFactory()
+    ~NuDBFactory() override
     {
         Manager::instance().erase(*this);
     }
 
     std::string
-    getName() const
+    getName() const override
     {
         return "NuDB";
     }
@@ -313,7 +312,7 @@ public:
         size_t keyBytes,
         Section const& keyValues,
         Scheduler& scheduler,
-        beast::Journal journal)
+        beast::Journal journal) override
     {
         return std::make_unique <NuDBBackend> (
             keyBytes, keyValues, scheduler, journal);

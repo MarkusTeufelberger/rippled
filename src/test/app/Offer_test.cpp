@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-#include <BeastConfig.h>
 #include <test/jtx.h>
 #include <test/jtx/WSClient.h>
 #include <test/jtx/PathSet.h>
@@ -47,7 +46,7 @@ class Offer_test : public beast::unit_test::suite
         using namespace jtx;
         auto feeDrops = env.current()->fees().base;
         return drops (dropsPerXRP<std::int64_t>::value * xrpAmount - feeDrops);
-    };
+    }
 
     static auto
     ledgerEntryState(jtx::Env & env, jtx::Account const& acct_a,
@@ -61,7 +60,7 @@ class Offer_test : public beast::unit_test::suite
         jvParams[jss::ripple_state][jss::accounts].append(acct_b.human());
         return env.rpc ("json", "ledger_entry",
             to_string(jvParams))[jss::result];
-    };
+    }
 
     static auto
     ledgerEntryRoot (jtx::Env & env, jtx::Account const& acct)
@@ -71,7 +70,7 @@ class Offer_test : public beast::unit_test::suite
         jvParams[jss::account_root] = acct.human();
         return env.rpc ("json", "ledger_entry",
             to_string(jvParams))[jss::result];
-    };
+    }
 
     static auto
     ledgerEntryOffer (jtx::Env & env,
@@ -82,7 +81,7 @@ class Offer_test : public beast::unit_test::suite
         jvParams[jss::offer][jss::seq] = offer_seq;
         return env.rpc ("json", "ledger_entry",
             to_string(jvParams))[jss::result];
-    };
+    }
 
     static auto
     getBookOffers(jtx::Env & env,
@@ -234,13 +233,13 @@ public:
         // an offer.  Show that the attempt to remove the offer fails.
         env.require (offers (alice, 2));
 
-        // featureChecks changes the return code on an expired Offer.  Adapt
-        // to that.
-        bool const featChecks {features[featureChecks]};
+        // featureDepositPreauths changes the return code on an expired Offer.
+        // Adapt to that.
+        bool const featPreauth {features[featureDepositPreauth]};
         env (offer (alice, XRP (5), USD (2)),
             json (sfExpiration.fieldName, lastClose(env)),
             json (jss::OfferSequence, offer2Seq),
-            ter (featChecks ? tecEXPIRED : tesSUCCESS));
+            ter (featPreauth ? TER {tecEXPIRED} : TER {tesSUCCESS}));
         env.close();
 
         env.require (offers (alice, 2));
@@ -290,8 +289,8 @@ public:
                 (hasFeature(env, featureFeeEscalation) &&
                     !hasFeature(env, fix1513));
             // Will fail without the underflow fix
-            auto expectedResult = *stAmountCalcSwitchover ?
-                tesSUCCESS : tecPATH_PARTIAL;
+            TER const expectedResult = *stAmountCalcSwitchover ?
+                TER {tesSUCCESS} : TER {tecPATH_PARTIAL};
             env (pay (alice, bob, EUR (epsilon)), path (~EUR),
                 sendmax (USD (100)), ter (expectedResult));
         }
@@ -330,7 +329,7 @@ public:
         for (auto withFix : {false, true})
         {
             if (!withFix &&
-                features[featureFlow] && features[featureFeeEscalation])
+                (features[featureFlow] || features[featureFeeEscalation]))
                 continue;
 
             Env env {*this, features};
@@ -620,10 +619,16 @@ public:
         auto const bob = Account {"bob"};
         auto const USD = gw["USD"];
 
-        // Fill or Kill - unless we fully cross, just charge
-        // a fee and not place the offer on the books:
+        // Fill or Kill - unless we fully cross, just charge a fee and don't
+        // place the offer on the books.  But also clean up expired offers
+        // that are discovered along the way.
+        //
+        // fix1578 changes the return code.  Verify expected behavior
+        // without and with fix1578.
+        for (auto const tweakedFeatures :
+            {features - fix1578, features | fix1578})
         {
-            Env env {*this, features};
+            Env env {*this, tweakedFeatures};
             auto const closeTime =
                 fix1449Time () +
                     100 * env.closed ()->info ().closeTimeResolution;
@@ -632,20 +637,41 @@ public:
             auto const f = env.current ()->fees ().base;
 
             env.fund (startBalance, gw, alice, bob);
+
+            // bob creates an offer that expires before the next ledger close.
+            env (offer (bob, USD (500), XRP (500)),
+                json (sfExpiration.fieldName, lastClose(env) + 1),
+                ter(tesSUCCESS));
+
+            // The offer expires (it's not removed yet).
+            env.close ();
+            env.require (
+                owners (bob, 1),
+                offers (bob, 1));
+
+            // bob creates the offer that will be crossed.
             env (offer (bob, USD (500), XRP (500)), ter(tesSUCCESS));
+            env.close();
+            env.require (
+                owners (bob, 2),
+                offers (bob, 2));
+
             env (trust (alice, USD (1000)),         ter(tesSUCCESS));
             env (pay (gw, alice, USD (1000)),       ter(tesSUCCESS));
 
-            // Order that can't be filled:
-            env (offer (alice, XRP (1000), USD (1000)),
-                txflags (tfFillOrKill),              ter(tesSUCCESS));
-
+            // Order that can't be filled but will remove bob's expired offer:
+            {
+                TER const killedCode {tweakedFeatures[fix1578] ?
+                    TER {tecKILLED} : TER {tesSUCCESS}};
+                env (offer (alice, XRP (1000), USD (1000)),
+                    txflags (tfFillOrKill),         ter(killedCode));
+            }
             env.require (
-                balance (alice, startBalance - f - f),
+                balance (alice, startBalance - (f * 2)),
                 balance (alice, USD (1000)),
                 owners (alice, 1),
                 offers (alice, 0),
-                balance (bob, startBalance - f),
+                balance (bob, startBalance - (f * 2)),
                 balance (bob, USD (none)),
                 owners (bob, 1),
                 offers (bob, 1));
@@ -655,11 +681,11 @@ public:
                 txflags (tfFillOrKill),              ter(tesSUCCESS));
 
             env.require (
-                balance (alice, startBalance - f - f - f + XRP (500)),
+                balance (alice, startBalance - (f * 3) + XRP (500)),
                 balance (alice, USD (500)),
                 owners (alice, 1),
                 offers (alice, 0),
-                balance (bob, startBalance - f - XRP (500)),
+                balance (bob, startBalance - (f * 2) - XRP (500)),
                 balance (bob, USD (500)),
                 owners (bob, 1),
                 offers (bob, 0));
@@ -683,7 +709,7 @@ public:
 
             // No cross:
             env (offer (alice, XRP (1000), USD (1000)),
-                txflags (tfImmediateOrCancel),               ter(tesSUCCESS));
+                txflags (tfImmediateOrCancel),              ter(tesSUCCESS));
 
             env.require (
                 balance (alice, startBalance - f - f),
@@ -692,9 +718,9 @@ public:
                 offers (alice, 0));
 
             // Partially cross:
-            env (offer (bob, USD (50), XRP (50)),            ter(tesSUCCESS));
+            env (offer (bob, USD (50), XRP (50)),           ter(tesSUCCESS));
             env (offer (alice, XRP (1000), USD (1000)),
-                txflags (tfImmediateOrCancel),               ter(tesSUCCESS));
+                txflags (tfImmediateOrCancel),              ter(tesSUCCESS));
 
             env.require (
                 balance (alice, startBalance - f - f - f + XRP (50)),
@@ -707,9 +733,9 @@ public:
                 offers (bob, 0));
 
             // Fully cross:
-            env (offer (bob, USD (50), XRP (50)),            ter(tesSUCCESS));
+            env (offer (bob, USD (50), XRP (50)),           ter(tesSUCCESS));
             env (offer (alice, XRP (50), USD (50)),
-                txflags (tfImmediateOrCancel),               ter(tesSUCCESS));
+                txflags (tfImmediateOrCancel),              ter(tesSUCCESS));
 
             env.require (
                 balance (alice, startBalance - f - f - f - f + XRP (100)),
@@ -955,12 +981,12 @@ public:
             owners (alice, 1));
 
         // Place an offer that should have already expired.
-        // The Checks amendment changes the return code; adapt to that.
-        bool const featChecks {features[featureChecks]};
+        // The DepositPreauth amendment changes the return code; adapt to that.
+        bool const featPreauth {features[featureDepositPreauth]};
 
         env (offer (alice, xrpOffer, usdOffer),
             json (sfExpiration.fieldName, lastClose(env)),
-            ter (featChecks ? tecEXPIRED : tesSUCCESS));
+            ter (featPreauth ? TER {tecEXPIRED} : TER {tesSUCCESS}));
 
         env.require (
             balance (alice, startBalance - f - f),
@@ -1128,15 +1154,19 @@ public:
         BEAST_EXPECT(jrr[jss::offers].size() == 0);
 
         // NOTE :
-        // at this point, all offers are expected to be consumed.
-        // alas, they are not - because of a bug in the Taker auto-bridging
-        // implementation (to be replaced in the not-so-distant future).
-        // the current implementation (incorrect) leaves an empty offer in the
-        // second leg of the bridge. validate both the old and the new
-        // behavior.
+        // At this point, all offers are expected to be consumed.
+        // Alas, they are not - because of a bug in the Taker auto-bridging
+        // implementation which is addressed by fixTakerDryOfferRemoval.
+        // The pre-fixTakerDryOfferRemoval implementation (incorrect) leaves
+        // an empty offer in the second leg of the bridge. Validate both the
+        // old and the new behavior.
         {
             auto acctOffers = offersOnAccount (env, account_to_test);
-            BEAST_EXPECT(acctOffers.size() == (features[featureFlowCross] ? 0 : 1));
+            bool const noStaleOffers {
+                features[featureFlowCross] ||
+                features[fixTakerDryOfferRemoval]};
+
+            BEAST_EXPECT(acctOffers.size() == (noStaleOffers ? 0 : 1));
             for (auto const& offerPtr : acctOffers)
             {
                 auto const& offer = *offerPtr;
@@ -1803,6 +1833,81 @@ public:
             gw2["EUR"] (20).value ().getJson (0));
         BEAST_EXPECT(
             jro[jss::node][jss::TakerPays] == XRP (200).value ().getText ());
+    }
+
+    void
+    testBridgedSecondLegDry(FeatureBitset features)
+    {
+        // At least with Taker bridging, a sensitivity was identified if the
+        // second leg goes dry before the first one.  This test exercises that
+        // case.
+        testcase ("Auto Bridged Second Leg Dry");
+
+        using namespace jtx;
+        Env env(*this, features);
+        auto const closeTime =
+            fix1449Time() +
+                100 * env.closed()->info().closeTimeResolution;
+        env.close (closeTime);
+
+        Account const alice {"alice"};
+        Account const bob {"bob"};
+        Account const carol {"carol"};
+        Account const gw {"gateway"};
+        auto const USD = gw["USD"];
+        auto const EUR = gw["EUR"];
+
+        env.fund(XRP(100000000), alice, bob, carol, gw);
+
+        env.trust(USD(10), alice);
+        env.close();
+        env(pay(gw, alice, USD(10)));
+        env.trust(USD(10), carol);
+        env.close();
+        env(pay(gw, carol, USD(3)));
+
+        env (offer (alice, EUR(2), XRP(1)));
+        env (offer (alice, EUR(2), XRP(1)));
+
+        env (offer (alice, XRP(1), USD(4)));
+        env (offer (carol, XRP(1), USD(3)));
+        env.close();
+
+        // Bob offers to buy 10 USD for 10 EUR.
+        //  1. He spends 2 EUR taking Alice's auto-bridged offers and
+        //     gets 4 USD for that.
+        //  2. He spends another 2 EUR taking Alice's last EUR->XRP offer and
+        //     Carol's XRP-USD offer.  He gets 3 USD for that.
+        // The key for this test is that Alice's XRP->USD leg goes dry before
+        // Alice's EUR->XRP.  The XRP->USD leg is the second leg which showed
+        // some sensitivity.
+        env.trust(EUR(10), bob);
+        env.close();
+        env(pay(gw, bob, EUR(10)));
+        env.close();
+        env(offer(bob, USD(10), EUR(10)));
+        env.close();
+
+        env.require (balance(bob, USD(7)));
+        env.require (balance(bob, EUR(6)));
+        env.require (offers (bob, 1));
+        env.require (owners (bob, 3));
+
+        env.require (balance(alice, USD(6)));
+        env.require (balance(alice, EUR(4)));
+        env.require (offers(alice, 0));
+        env.require (owners(alice, 2));
+
+        env.require (balance(carol, USD(0)));
+        env.require (balance(carol, EUR(none)));
+        // If neither featureFlowCross nor fixTakerDryOfferRemoval are defined
+        // then carol's offer will be left on the books, but with zero value.
+        int const emptyOfferCount {
+            features[featureFlowCross] ||
+            features[fixTakerDryOfferRemoval] ? 0 : 1};
+
+        env.require (offers(carol, 0 + emptyOfferCount));
+        env.require (owners(carol, 1 + emptyOfferCount));
     }
 
     void
@@ -2740,6 +2845,10 @@ public:
 
         env.fund (XRP(10000000), gw, alice, bob);
 
+        // Code returned if an offer is killed.
+        TER const killedCode {
+            features[fix1578] ? TER {tecKILLED} : TER {tesSUCCESS}};
+
         // bob offers XRP for USD.
         env (trust(bob, USD(200)));
         env.close();
@@ -2749,8 +2858,8 @@ public:
         env.close();
         {
             // alice submits a tfSell | tfFillOrKill offer that does not cross.
-            // It's still a tesSUCCESS, since the offer was successfully killed.
-            env (offer(alice, USD(21), XRP(2100), tfSell | tfFillOrKill));
+            env (offer(alice, USD(21), XRP(2100),
+                tfSell | tfFillOrKill), ter (killedCode));
             env.close();
             env.require (balance (alice, USD(none)));
             env.require (offers (alice, 0));
@@ -2783,7 +2892,8 @@ public:
             // all of the offer is consumed.
 
             // We're using bob's left-over offer for XRP(500), USD(5)
-            env (offer(alice, USD(1), XRP(501), tfSell | tfFillOrKill));
+            env (offer(alice, USD(1), XRP(501),
+                tfSell | tfFillOrKill), ter (killedCode));
             env.close();
             env.require (balance (alice, USD(35)));
             env.require (offers (alice, 0));
@@ -3423,7 +3533,7 @@ public:
 
             // Determine which TEC code we expect.
             TER const tecExpect =
-                features[featureFlow] ? temBAD_PATH : tecPATH_DRY;
+                features[featureFlow] ? TER {temBAD_PATH} : TER {tecPATH_DRY};
 
             // This payment caused the assert.
             env (pay (ann, ann, D_BUX(30)),
@@ -4391,20 +4501,20 @@ public:
         env(fset (gw, asfRequireAuth));
         env.close();
 
-        // The test behaves differently with or without FlowCross.
-        bool const flowCross = features[featureFlowCross];
+        // The test behaves differently with or without DepositPreauth.
+        bool const preauth = features[featureDepositPreauth];
 
-        // Before FlowCross an account with lsfRequireAuth set could not
-        // create an offer to buy their own currency.  After FlowCross
+        // Before DepositPreauth an account with lsfRequireAuth set could not
+        // create an offer to buy their own currency.  After DepositPreauth
         // they can.
         env (offer (gw, gwUSD(40), XRP(4000)),
-            ter (flowCross ? tesSUCCESS : tecNO_LINE));
+            ter (preauth ? TER {tesSUCCESS} : TER {tecNO_LINE}));
         env.close();
 
-        env.require (offers (gw, flowCross ? 1 : 0));
+        env.require (offers (gw, preauth ? 1 : 0));
 
-        if (!flowCross)
-            // The rest of the test verifies FlowCross behavior.
+        if (!preauth)
+            // The rest of the test verifies DepositPreauth behavior.
             return;
 
         // Set up an authorized trust line and pay alice gwUSD 50.
@@ -4576,6 +4686,7 @@ public:
         testCrossCurrencyStartXRP(features);
         testCrossCurrencyEndXRP(features);
         testCrossCurrencyBridged(features);
+        testBridgedSecondLegDry(features);
         testOfferFeesConsumeFunds(features);
         testOfferCreateThenCross(features);
         testSellFlagBasic(features);
@@ -4609,20 +4720,15 @@ public:
     void run () override
     {
         using namespace jtx;
-        auto const all           = supported_amendments();
-        FeatureBitset const flow{featureFlow};
+        FeatureBitset const all{supported_amendments()};
         FeatureBitset const f1373{fix1373};
         FeatureBitset const flowCross{featureFlowCross};
-        (void) flow;
+        FeatureBitset const takerDryOffer{fixTakerDryOfferRemoval};
 
-        // The first three test variants below passed at one time in the past
-        // (and should still pass) but are commented out to conserve test time.
-//      testAll(all - flow - f1373 - flowCross);
-//      testAll(all - flow - f1373            );
-//      testAll(all        - f1373 - flowCross);
-        testAll(all        - f1373            );
-        testAll(all                - flowCross);
-        testAll(all                           );
+        testAll(all - f1373             - takerDryOffer);
+        testAll(all         - flowCross - takerDryOffer);
+        testAll(all         - flowCross                );
+        testAll(all                                    );
     }
 };
 
@@ -4631,12 +4737,13 @@ class Offer_manual_test : public Offer_test
     void run() override
     {
         using namespace jtx;
-        auto const all = supported_amendments();
+        FeatureBitset const all{supported_amendments()};
         FeatureBitset const feeEscalation{featureFeeEscalation};
         FeatureBitset const flow{featureFlow};
         FeatureBitset const f1373{fix1373};
         FeatureBitset const flowCross{featureFlowCross};
         FeatureBitset const f1513{fix1513};
+        FeatureBitset const takerDryOffer{fixTakerDryOfferRemoval};
 
         testAll(all -feeEscalation - flow - f1373 - flowCross - f1513);
         testAll(all                - flow - f1373 - flowCross - f1513);
@@ -4656,11 +4763,15 @@ class Offer_manual_test : public Offer_test
         testAll(all -feeEscalation                            - f1513);
         testAll(all                                           - f1513);
         testAll(all                                                  );
+
+        testAll(all                - flow - f1373 - flowCross - takerDryOffer);
+        testAll(all                - flow - f1373             - takerDryOffer);
+        testAll(all                       - f1373 - flowCross - takerDryOffer);
     }
 };
 
-BEAST_DEFINE_TESTSUITE (Offer, tx, ripple);
-BEAST_DEFINE_TESTSUITE_MANUAL (Offer_manual, tx, ripple);
+BEAST_DEFINE_TESTSUITE_PRIO (Offer, tx, ripple, 4);
+BEAST_DEFINE_TESTSUITE_MANUAL_PRIO (Offer_manual, tx, ripple, 20);
 
 }  // test
 }  // ripple
